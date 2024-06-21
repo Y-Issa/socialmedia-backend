@@ -7,3 +7,7 @@ export const getUserByIdQuery = "SELECT * FROM users WHERE id = $1";
 export const getPostsQuery = `SELECT P.*, name, "profileImage" FROM posts P JOIN users U ON P."userId" = U."userId" LEFT JOIN relationships R ON (P."userId" = R."followedUserId") WHERE R."followerUserId" = $1 OR p."userId" = $1 ORDER BY P."createdAt" DESC`;
 
 export const createPostQuery = `INSERT INTO posts (description, image, "userId") VALUES ($1, $2, $3) RETURNING *`;
+
+export const getCommentsQuery = `SELECT C.*, name, "profileImage" FROM comments C JOIN users U ON C."userId" = U."userId" WHERE "postId" = $1 ORDER BY C."createdAt" DESC`;
+
+export const createCommentQuery = `INSERT INTO comments (description, "postId", "userId") VALUES ($1, $2, $3) RETURNING *`;
