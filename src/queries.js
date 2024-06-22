@@ -11,3 +11,9 @@ export const createPostQuery = `INSERT INTO posts (description, image, "userId")
 export const getCommentsQuery = `SELECT C.*, name, "profileImage" FROM comments C JOIN users U ON C."userId" = U."userId" WHERE "postId" = $1 ORDER BY C."createdAt" DESC`;
 
 export const createCommentQuery = `INSERT INTO comments (description, "postId", "userId") VALUES ($1, $2, $3) RETURNING *`;
+
+export const getLikesQuery = `SELECT * FROM likes WHERE "postId" = $1`;
+
+export const createLikeQuery = `INSERT INTO likes ("postId", "userId") VALUES ($1, $2) RETURNING *`;
+
+export const deleteLikeQuery = `DELETE FROM likes WHERE "postId" = $1 AND "userId" = $2`;
