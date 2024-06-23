@@ -8,6 +8,7 @@ import postsRouter from "./src/routes/posts.js";
 import likesRouter from "./src/routes/likes.js";
 import commentsRouter from "./src/routes/comments.js";
 import authRouter from "./src/routes/auth.js";
+import relationshipsRouter from "./src/routes/relationships.js";
 
 const app = express();
 
@@ -34,6 +35,7 @@ app.use("/api/posts", postsRouter);
 app.use("/api/likes", likesRouter);
 app.use("/api/comments", commentsRouter);
 app.use("/api/auth", authRouter);
+app.use("/api/relationships", relationshipsRouter);
 
 app.listen(process.env.PORT, () => {
   console.log("API WORKING!");
