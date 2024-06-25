@@ -1,57 +1,37 @@
-import jwt from "jsonwebtoken";
-import pool from "../../db.js";
 import { createLikeQuery, deleteLikeQuery, getLikesQuery } from "../queries.js";
+import pool from "../../db.js";
 
-export function getLikes(req, res) {
+export async function getLikes(req, res) {
   const { postId } = req.params;
 
-  pool.query(getLikesQuery, [postId], (error, results) => {
-    if (error) throw error;
-
-    return res.status(200).json(results.rows.map((like) => like.userId));
-  });
+  try {
+    const result = await pool.query(getLikesQuery, [postId]);
+    res.status(200).json(result.rows.map((like) => like.userId));
+  } catch (error) {
+    res.status(500).send("Server error");
+  }
 }
 
-export function createLike(req, res) {
-  const { authorization } = req.headers;
+export async function createLike(req, res) {
   const { postId } = req.params;
+  const userInfo = req.userInfo;
 
-  if (!authorization) {
-    return res.status(401).send("Unauthorized");
+  try {
+    const result = await pool.query(createLikeQuery, [postId, userInfo.id]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).send("Server error");
   }
-
-  const token = authorization.split(" ")[1];
-
-  jwt.verify(token, process.env.JWT_SECRET, (error, userInfo) => {
-    if (error) {
-      return res.status(403).send("Unauthorized");
-    }
-    pool.query(createLikeQuery, [postId, userInfo.id], (error, results) => {
-      if (error) throw error;
-
-      return res.status(201).json(results.rows[0]);
-    });
-  });
 }
 
-export function deleteLike(req, res) {
-  const { authorization } = req.headers;
+export async function deleteLike(req, res) {
   const { postId } = req.params;
+  const userInfo = req.userInfo;
 
-  if (!authorization) {
-    return res.status(401).send("Unauthorized");
+  try {
+    await pool.query(deleteLikeQuery, [postId, userInfo.id]);
+    res.status(204).send("Like deleted");
+  } catch (error) {
+    res.status(500).send("Server error");
   }
-
-  const token = authorization.split(" ")[1];
-
-  jwt.verify(token, process.env.JWT_SECRET, (error, userInfo) => {
-    if (error) {
-      return res.status(403).send("Unauthorized");
-    }
-    pool.query(deleteLikeQuery, [postId, userInfo.id], (error) => {
-      if (error) throw error;
-
-      return res.status(204).send("Like deleted");
-    });
-  });
 }

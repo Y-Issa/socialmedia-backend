@@ -1,8 +1,10 @@
 import express from "express";
-import { getUser } from "../controllers/user.js";
+import { getUser, updateUser } from "../controllers/user.js";
+import { verifyToken } from "../middleware/jwtMiddleware.js";
 
 const router = express.Router();
 
-router.get("/find/:uid", getUser);
+router.get("/find/:uid", verifyToken, getUser);
+router.put("/", verifyToken, updateUser);
 
 export default router;

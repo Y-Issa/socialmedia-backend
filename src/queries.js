@@ -4,10 +4,16 @@ export const createUserQuery =
 
 export const getUserByIdQuery = `SELECT * FROM users WHERE "userId" = $1`;
 
+export const updateUserQuery = `UPDATE users SET name = $1, city = $2, website = $3, password = $4, "profileImage" = $5, "coverImage" = $6 WHERE "userId" = $7 RETURNING *`;
+
 // //
 export const getPostsQuery = `SELECT P.*, name, "profileImage" FROM posts P JOIN users U ON P."userId" = U."userId" LEFT JOIN relationships R ON (P."userId" = R."followedUserId") WHERE R."followerUserId" = $1 OR p."userId" = $1 ORDER BY P."createdAt" DESC`;
 
+export const getUserPostsQuery = `SELECT P.*, name, "profileImage" FROM posts P JOIN users U ON P."userId" = U."userId" WHERE P."userId" = $1 ORDER BY P."createdAt" DESC`;
+
 export const createPostQuery = `INSERT INTO posts (description, image, "userId") VALUES ($1, $2, $3) RETURNING *`;
+
+export const deletePostQuery = `DELETE FROM posts WHERE "postId" = $1 AND "userId" = $2`;
 
 // //
 

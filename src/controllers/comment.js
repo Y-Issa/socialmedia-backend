@@ -1,41 +1,30 @@
-import jwt from "jsonwebtoken";
-
 import { createCommentQuery, getCommentsQuery } from "../queries.js";
 import pool from "../../db.js";
 
-export function getComments(req, res) {
+export async function getComments(req, res) {
   const { postId } = req.params;
 
-  pool.query(getCommentsQuery, [postId], (error, results) => {
-    if (error) throw error;
-
-    return res.status(200).json(results.rows);
-  });
+  try {
+    const result = await pool.query(getCommentsQuery, [postId]);
+    res.status(200).json(result.rows);
+  } catch (error) {
+    res.status(500).send("Server error");
+  }
 }
 
-export function createComment(req, res) {
-  const { authorization } = req.headers;
+export async function createComment(req, res) {
   const { postId } = req.params;
   const { description } = req.body;
+  const userInfo = req.userInfo;
 
-  if (!authorization) {
-    return res.status(401).send("Unauthorized");
+  try {
+    const result = await pool.query(createCommentQuery, [
+      description,
+      postId,
+      userInfo.id,
+    ]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).send("Server error");
   }
-
-  const token = authorization.split(" ")[1];
-
-  jwt.verify(token, process.env.JWT_SECRET, (error, userInfo) => {
-    if (error) {
-      return res.status(403).send("Unauthorized");
-    }
-    pool.query(
-      createCommentQuery,
-      [description, postId, userInfo.id],
-      (error, results) => {
-        if (error) throw error;
-
-        return res.status(201).json(results.rows[0]);
-      }
-    );
-  });
 }

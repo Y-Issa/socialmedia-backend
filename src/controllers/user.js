@@ -1,28 +1,59 @@
-import jwt from "jsonwebtoken";
-import { getUserByIdQuery } from "../queries.js";
+import bcrypt from "bcrypt";
 import pool from "../../db.js";
+import { getUserByIdQuery, updateUserQuery } from "../queries.js";
 
-export function getUser(req, res) {
+export async function getUser(req, res) {
   const { uid } = req.params;
-  const { authorization } = req.headers;
 
-  if (!authorization) {
-    return res.status(401).send("Unauthorized");
+  try {
+    const result = await pool.query(getUserByIdQuery, [uid]);
+    res.status(200).json((({ password, ...rest }) => rest)(result.rows[0]));
+  } catch (error) {
+    res.status(500).send("Server error");
   }
+}
 
-  const token = authorization.split(" ")[1];
+export async function updateUser(req, res) {
+  const {
+    name,
+    city,
+    website,
+    newPassword,
+    oldPassword,
+    coverImage,
+    profileImage,
+  } = req.body;
+  const userInfo = req.userInfo;
 
-  jwt.verify(token, process.env.JWT_SECRET, (error, userInfo) => {
-    if (error) {
-      return res.status(403).send("Unauthorized");
+  try {
+    const userResult = await pool.query(getUserByIdQuery, [userInfo.id]);
+    const user = userResult.rows[0];
+
+    const match = bcrypt.compareSync(oldPassword, user.password);
+    if (!match) {
+      return res.status(401).send("Password is incorrect");
     }
 
-    pool.query(getUserByIdQuery, [uid], (error, results) => {
-      if (error) throw error;
+    let password = user.password;
+    if (newPassword) {
+      const salt = bcrypt.genSaltSync(10);
+      const hashedPassword = bcrypt.hashSync(newPassword, salt);
+      password = hashedPassword;
+    }
 
-      return res
-        .status(200)
-        .json((({ password, ...rest }) => rest)(results.rows[0]));
-    });
-  });
+    const updateUserResult = await pool.query(updateUserQuery, [
+      name,
+      city,
+      website,
+      password,
+      profileImage,
+      coverImage,
+      userInfo.id,
+    ]);
+    res
+      .status(200)
+      .json((({ password, ...rest }) => rest)(updateUserResult.rows[0]));
+  } catch (error) {
+    res.status(500).send("Server error");
+  }
 }

@@ -1,51 +1,51 @@
-import jwt from "jsonwebtoken";
-import "dotenv/config.js";
 import pool from "../../db.js";
-import { createPostQuery, getPostsQuery } from "../queries.js";
+import {
+  createPostQuery,
+  deletePostQuery,
+  getPostsQuery,
+  getUserPostsQuery,
+} from "../queries.js";
 
-export function getPosts(req, res) {
-  const { authorization } = req.headers;
+export async function getPosts(req, res) {
+  const { userId } = req.query;
+  const currentUserInfo = req.userInfo;
 
-  if (!authorization) {
-    return res.status(401).send("Unauthorized");
+  try {
+    const values = userId !== "undefined" ? [userId] : [currentUserInfo.id];
+    const result = await pool.query(
+      userId !== "undefined" ? getUserPostsQuery : getPostsQuery,
+      values
+    );
+    res.status(200).json(result.rows);
+  } catch (error) {
+    res.status(500).send("Server error");
   }
-
-  const token = authorization.split(" ")[1];
-
-  jwt.verify(token, process.env.JWT_SECRET, (error, userInfo) => {
-    if (error) {
-      return res.status(403).send("Unauthorized");
-    }
-    pool.query(getPostsQuery, [userInfo.id], (error, results) => {
-      if (error) throw error;
-
-      return res.status(200).json(results.rows);
-    });
-  });
 }
 
-export function createPost(req, res) {
-  const { authorization } = req.headers;
+export async function createPost(req, res) {
   const { description, image } = req.body;
+  const userInfo = req.userInfo;
 
-  if (!authorization) {
-    return res.status(401).send("Unauthorized");
+  try {
+    const result = await pool.query(createPostQuery, [
+      description,
+      image,
+      userInfo.id,
+    ]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).send("Server error");
   }
+}
 
-  const token = authorization.split(" ")[1];
+export async function deletePost(req, res) {
+  const { postId } = req.params;
+  const userInfo = req.userInfo;
 
-  jwt.verify(token, process.env.JWT_SECRET, (error, userInfo) => {
-    if (error) {
-      return res.status(403).send("Unauthorized");
-    }
-    pool.query(
-      createPostQuery,
-      [description, image, userInfo.id],
-      (error, results) => {
-        if (error) throw error;
-
-        return res.status(201).json(results.rows[0]);
-      }
-    );
-  });
+  try {
+    await pool.query(deletePostQuery, [postId, userInfo.id]);
+    res.status(204).send("Post deleted");
+  } catch (error) {
+    res.status(500).send("Server error");
+  }
 }
