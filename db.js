@@ -110,4 +110,23 @@ CREATE TABLE likes (
         ON UPDATE CASCADE
 );
 
+-- Create saved_posts table
+CREATE TABLE saved (
+    "savedPostId" UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    "userId" UUID,
+    "postId" UUID,
+    "savedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_user
+        FOREIGN KEY("userId")
+        REFERENCES users("userId")
+        ON DELETE CASCADE
+        ON UPDATE CASCADE,
+    CONSTRAINT fk_post
+        FOREIGN KEY("postId")
+        REFERENCES posts("postId")
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+);
+
+
 */

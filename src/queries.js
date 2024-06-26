@@ -36,3 +36,13 @@ export const getRelationshipsQuery = `SELECT "followerUserId" FROM relationships
 export const createRelationshipQuery = `INSERT INTO relationships ("followerUserId", "followedUserId") VALUES ($1, $2) RETURNING *`;
 
 export const deleteRelationshipQuery = `DELETE FROM relationships WHERE "followerUserId" = $1 AND "followedUserId" = $2`;
+
+// //
+
+export const savePostQuery = `INSERT INTO saved ("postId", "userId") VALUES ($1, $2) RETURNING *`;
+
+export const getSavedPostsQuery = `SELECT P.*, name, "profileImage" FROM posts P JOIN saved S ON P."postId" = S."postId" JOIN users U ON P."userId" = U."userId" WHERE S."userId" = $1 ORDER BY P."createdAt" DESC`;
+
+export const getSavedPostIdsQuery = `SELECT "postId" FROM saved WHERE "userId" = $1`;
+
+export const unsavePostQuery = `DELETE FROM saved WHERE "postId" = $1 AND "userId" = $2`;

@@ -9,6 +9,7 @@ import likesRouter from "./src/routes/likes.js";
 import commentsRouter from "./src/routes/comments.js";
 import authRouter from "./src/routes/auth.js";
 import relationshipsRouter from "./src/routes/relationships.js";
+import saveRouter from "./src/routes/save.js";
 
 const app = express();
 
@@ -36,6 +37,7 @@ app.use("/api/likes", likesRouter);
 app.use("/api/comments", commentsRouter);
 app.use("/api/auth", authRouter);
 app.use("/api/relationships", relationshipsRouter);
+app.use("/api/save", saveRouter);
 
 app.listen(process.env.PORT, () => {
   console.log("API WORKING!");
