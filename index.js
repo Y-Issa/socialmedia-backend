@@ -10,6 +10,7 @@ import commentsRouter from "./src/routes/comments.js";
 import authRouter from "./src/routes/auth.js";
 import relationshipsRouter from "./src/routes/relationships.js";
 import saveRouter from "./src/routes/save.js";
+import groupsRouter from "./src/routes/groups.js";
 
 const app = express();
 
@@ -38,6 +39,7 @@ app.use("/api/comments", commentsRouter);
 app.use("/api/auth", authRouter);
 app.use("/api/relationships", relationshipsRouter);
 app.use("/api/save", saveRouter);
+app.use("/api/groups", groupsRouter);
 
 app.listen(process.env.PORT, () => {
   console.log("API WORKING!");

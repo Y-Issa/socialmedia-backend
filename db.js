@@ -128,5 +128,58 @@ CREATE TABLE saved (
         ON UPDATE CASCADE
 );
 
+-- Query to create the groups table
+CREATE TABLE groups (
+    "groupId" UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    description TEXT,
+    image VARCHAR(200),
+    "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    "createdBy" UUID,
+    CONSTRAINT fk_creator
+        FOREIGN KEY("createdBy")
+        REFERENCES users("userId")
+        ON DELETE SET NULL
+        ON UPDATE CASCADE
+);
+
+-- Query to create the group_members table
+CREATE TABLE group_members (
+    "groupId" UUID,
+    "userId" UUID,
+    "joinedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY ("groupId", "userId"),
+    CONSTRAINT fk_group
+        FOREIGN KEY("groupId")
+        REFERENCES groups("groupId")
+        ON DELETE CASCADE
+        ON UPDATE CASCADE,
+    CONSTRAINT fk_user
+        FOREIGN KEY("userId")
+        REFERENCES users("userId")
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+);
+
+-- Query to create the group_posts table
+CREATE TABLE group_posts (
+    "postId" UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    "groupId" UUID,
+    "userId" UUID,
+    description VARCHAR(200),
+    image VARCHAR(200),
+    "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_group
+        FOREIGN KEY("groupId")
+        REFERENCES groups("groupId")
+        ON DELETE CASCADE
+        ON UPDATE CASCADE,
+    CONSTRAINT fk_user
+        FOREIGN KEY("userId")
+        REFERENCES users("userId")
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+);
+
 
 */
