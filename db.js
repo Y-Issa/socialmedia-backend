@@ -110,11 +110,12 @@ CREATE TABLE likes (
         ON UPDATE CASCADE
 );
 
--- Create saved_posts table
+-- Create saved table
 CREATE TABLE saved (
     "savedPostId" UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
     "userId" UUID,
     "postId" UUID,
+    "groupPostId" UUID,
     "savedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_user
         FOREIGN KEY("userId")
@@ -124,6 +125,11 @@ CREATE TABLE saved (
     CONSTRAINT fk_post
         FOREIGN KEY("postId")
         REFERENCES posts("postId")
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+    CONSTRAINT fk_g_post
+        FOREIGN KEY("groupPostId")
+        REFERENCES group_posts("postId")
         ON DELETE CASCADE
         ON UPDATE CASCADE
 );
@@ -172,6 +178,42 @@ CREATE TABLE group_posts (
     CONSTRAINT fk_group
         FOREIGN KEY("groupId")
         REFERENCES groups("groupId")
+        ON DELETE CASCADE
+        ON UPDATE CASCADE,
+    CONSTRAINT fk_user
+        FOREIGN KEY("userId")
+        REFERENCES users("userId")
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+);
+
+CREATE TABLE group_post_likes (
+    "likeId" UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    "postId" UUID,
+    "userId" UUID,
+    "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_group_post
+        FOREIGN KEY("postId")
+        REFERENCES group_posts("postId")
+        ON DELETE CASCADE
+        ON UPDATE CASCADE,
+    CONSTRAINT fk_user
+        FOREIGN KEY("userId")
+        REFERENCES users("userId")
+        ON DELETE CASCADE
+        ON UPDATE CASCADE,
+    UNIQUE ("postId", "userId")
+);
+
+CREATE TABLE group_post_comments (
+    "commentId" UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    "postId" UUID,
+    "userId" UUID,
+    description VARCHAR(200) NOT NULL,
+    "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_group_post
+        FOREIGN KEY("postId")
+        REFERENCES group_posts("postId")
         ON DELETE CASCADE
         ON UPDATE CASCADE,
     CONSTRAINT fk_user
