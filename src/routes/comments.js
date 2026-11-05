@@ -7,7 +7,7 @@ const router = express.Router();
 
 router.param("postId", validateIdParam);
 
-router.get("/:postId", getComments);
+router.get("/:postId", verifyToken, getComments);
 router.post("/:postId", verifyToken, createComment);
 
 export default router;

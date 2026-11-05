@@ -1,15 +1,15 @@
 import { createCommentQuery, getCommentsQuery } from "../queries.js";
 import pool from "../../db.js";
-import {
-  cleanString,
-  commentError,
-  isForeignKeyViolation,
-} from "../utils/validate.js";
+import { cleanString, commentError } from "../utils/validate.js";
+import { ensurePostAccess } from "../utils/access.js";
 
+// Group posts: members only (403).
 export async function getComments(req, res) {
   const { postId } = req.params;
 
   try {
+    if (!(await ensurePostAccess(res, postId, req.userInfo.id))) return;
+
     const result = await pool.query(getCommentsQuery, [postId]);
     res.status(200).json(result.rows);
   } catch (error) {
@@ -29,6 +29,8 @@ export async function createComment(req, res) {
   }
 
   try {
+    if (!(await ensurePostAccess(res, postId, userInfo.id))) return;
+
     const result = await pool.query(createCommentQuery, [
       description,
       postId,
@@ -36,9 +38,6 @@ export async function createComment(req, res) {
     ]);
     res.status(201).json(result.rows[0]);
   } catch (error) {
-    if (isForeignKeyViolation(error)) {
-      return res.status(404).send("Post not found");
-    }
     console.error("createComment:", error);
     res.status(500).send("Server error");
   }

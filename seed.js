@@ -1,5 +1,6 @@
 // Seeds the database with demo users, posts, follows, comments, likes,
-// groups and saved posts.
+// groups and saved posts. Group posts are rows in posts with a "groupId";
+// their likes, comments and saves live in the same tables as everything else.
 //
 //   npm run seed            -> seeds only if the database is empty
 //   npm run seed -- --reset -> WIPES ALL DATA, then seeds
@@ -97,7 +98,7 @@ const GROUP_LIKES = [
   ["g1", "test"], ["g1", "sara"], ["g2", "omar"], ["g3", "james"], ["g3", "mona"], ["g4", "test"],
 ];
 
-// Test user's saved posts: [user, post] / [user, groupPost]
+// Test user's saved posts: [user, post] / [user, group post]
 const SAVED = [["test", "p3"], ["test", "p4"]];
 const SAVED_GROUP = [["test", "g1"]];
 
@@ -119,7 +120,7 @@ async function main() {
 
     if (reset) {
       await client.query(
-        "TRUNCATE users, posts, comments, stories, relationships, likes, groups, group_members, group_posts, group_post_likes, group_post_comments, saved RESTART IDENTITY CASCADE"
+        "TRUNCATE users, posts, comments, stories, relationships, likes, groups, group_members, saved RESTART IDENTITY CASCADE"
       );
       console.log("All existing data wiped.");
     }
@@ -179,29 +180,35 @@ async function main() {
     const gp = {};
     for (const post of GROUP_POSTS) {
       const r = await client.query(
-        `INSERT INTO group_posts (description, image, "userId", "groupId", "createdAt")
+        `INSERT INTO posts (description, image, "userId", "groupId", "createdAt")
          VALUES ($1, $2, $3, $4, $5) RETURNING "postId"`,
         [post.description, post.image || null, u[post.by], g[post.group], ago(post.hoursAgo)]
       );
       gp[post.key] = r.rows[0].postId;
     }
 
-    for (const [post, user, text] of GROUP_COMMENTS) {
+    for (const [i, [post, user, text]] of GROUP_COMMENTS.entries()) {
+      const hours = GROUP_POSTS.find((x) => x.key === post).hoursAgo - 0.5 - i * 0.05;
       await client.query(
-        `INSERT INTO group_post_comments (description, "postId", "userId") VALUES ($1, $2, $3)`,
-        [text, gp[post], u[user]]
+        `INSERT INTO comments (description, "postId", "userId", "createdAt") VALUES ($1, $2, $3, $4)`,
+        [text, gp[post], u[user], ago(Math.max(hours, 0.1))]
       );
     }
 
     for (const [post, user] of GROUP_LIKES) {
-      await client.query(`INSERT INTO group_post_likes ("postId", "userId") VALUES ($1, $2)`, [gp[post], u[user]]);
+      await client.query(`INSERT INTO likes ("postId", "userId") VALUES ($1, $2)`, [gp[post], u[user]]);
     }
 
-    for (const [user, post] of SAVED) {
-      await client.query(`INSERT INTO saved ("userId", "postId") VALUES ($1, $2)`, [u[user], p[post]]);
-    }
-    for (const [user, post] of SAVED_GROUP) {
-      await client.query(`INSERT INTO saved ("userId", "groupPostId") VALUES ($1, $2)`, [u[user], gp[post]]);
+    // Spread savedAt so the saved list (ordered by savedAt) has a stable order.
+    const toSave = [
+      ...SAVED.map(([user, post]) => [u[user], p[post]]),
+      ...SAVED_GROUP.map(([user, post]) => [u[user], gp[post]]),
+    ];
+    for (const [i, [userId, postId]] of toSave.entries()) {
+      await client.query(
+        `INSERT INTO saved ("userId", "postId", "savedAt") VALUES ($1, $2, $3)`,
+        [userId, postId, ago(1 + i)]
+      );
     }
 
     await client.query("COMMIT");

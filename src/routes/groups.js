@@ -2,33 +2,22 @@ import express from "express";
 import { verifyToken } from "../middleware/jwtMiddleware.js";
 import {
   createGroup,
-  createGroupComment,
   createGroupPost,
-  createGroupPostLike,
   deleteGroup,
-  deleteGroupPost,
-  deleteGroupPostLike,
   getGroup,
-  getGroupComments,
   getGroupMembers,
-  getGroupPostLikes,
   getGroupPosts,
-  getGroupSavedPostIds,
-  getGroupSavedPosts,
   getJoinedGroups,
   getUnjoinedGroups,
   joinGroup,
   leaveGroup,
-  saveGroupPost,
-  unsaveGroupPost,
 } from "../controllers/group.js";
 import { validateIdParam } from "../utils/validate.js";
 
 const router = express.Router();
 
-// Every :groupId / :postId must be a UUID (400 "Invalid id" otherwise).
+// Every :groupId must be a UUID (400 "Invalid id" otherwise).
 router.param("groupId", validateIdParam);
-router.param("postId", validateIdParam);
 
 router.post("/", verifyToken, createGroup);
 router.delete("/:groupId/delete", verifyToken, deleteGroup);
@@ -41,22 +30,12 @@ router.get("/:groupId/members", verifyToken, getGroupMembers);
 
 router.get("/:groupId/posts", verifyToken, getGroupPosts);
 router.post("/:groupId/posts", verifyToken, createGroupPost);
-router.delete("/posts/:postId", verifyToken, deleteGroupPost);
 
-router.get("/:postId/comments", verifyToken, getGroupComments);
-router.post("/:postId/comments", verifyToken, createGroupComment);
+// Group posts are ordinary posts with a groupId: like, comment, save and
+// delete them through /api/likes, /api/comments, /api/save and /api/posts.
 
-router.get("/:postId/likes", verifyToken, getGroupPostLikes);
-router.post("/:postId/likes", verifyToken, createGroupPostLike);
-router.delete("/:postId/likes", verifyToken, deleteGroupPostLike);
-
-router.post("/save/:postId", verifyToken, saveGroupPost);
-router.get("/save", verifyToken, getGroupSavedPosts);
-router.get("/save/ids", verifyToken, getGroupSavedPostIds);
-router.delete("/save/:postId", verifyToken, unsaveGroupPost);
-
-// Registered last so the static GET routes above (/joined, /unjoined, /save,
-// /save/ids) are matched first.
+// Registered last so the static GET routes above (/joined, /unjoined) are
+// matched first.
 router.get("/:groupId", verifyToken, getGroup);
 
 export default router;

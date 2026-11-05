@@ -1,4 +1,4 @@
-// Smoke test for the Phase 1 fixes. Needs the API running and seeded data.
+// Smoke test for the Phase 1 + Phase 2 API. Needs the API running and seeded data.
 //
 //   node scripts/smoke.mjs
 //   API_URL=http://localhost:8002/api node scripts/smoke.mjs
@@ -8,7 +8,7 @@
 import "dotenv/config";
 import jwt from "jsonwebtoken";
 
-const API = process.env.API_URL || "http://localhost:8001/api";
+const API = process.env.API_URL || "http://localhost:8011/api";
 const PASSWORD = "test1234";
 const MISSING_ID = "00000000-0000-4000-8000-000000000000";
 
@@ -53,6 +53,42 @@ function expectStatus(name, res, status, message) {
     okStatus && okMessage,
     `got ${res.status} ${String(JSON.stringify(res.data)).slice(0, 120)}`
   );
+}
+
+// Follows nextCursor until the end; returns every item (or null on error).
+async function walk(path, token, limit) {
+  const items = [];
+  let cursor = null;
+  for (let i = 0; i < 100; i++) {
+    const sep = path.includes("?") ? "&" : "?";
+    const url = `${path}${sep}limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+    const res = await call("GET", url, { token });
+    if (res.status !== 200 || !Array.isArray(res.data.items)) return null;
+    if (res.data.items.length > limit) return null;
+    items.push(...res.data.items);
+    cursor = res.data.nextCursor;
+    if (!cursor) return items;
+  }
+  return null;
+}
+
+const POST_KEYS =
+  "commentCount,createdAt,description,groupId,groupName,image,likeCount,likedByMe,name,postId,profileImage,savedByMe,userId";
+
+function hasPostShape(post, extra = []) {
+  return (
+    post &&
+    Object.keys(post).sort().join(",") === [...POST_KEYS.split(","), ...extra].sort().join(",") &&
+    Number.isInteger(post.likeCount) &&
+    Number.isInteger(post.commentCount) &&
+    typeof post.likedByMe === "boolean" &&
+    typeof post.savedByMe === "boolean"
+  );
+}
+
+async function findPost(path, token, postId) {
+  const items = await walk(path, token, 50);
+  return items?.find((p) => p.postId === postId);
 }
 
 async function login(who) {
@@ -161,6 +197,42 @@ async function main() {
     "other profile has no email/password",
     other.status === 200 && !("email" in other.data) && !("password" in other.data)
   );
+  const followers = await call("GET", `/relationships/${test.id}`, { token: test.token });
+  const followerList = await call("GET", `/users/${test.id}/followers`, { token: sara.token });
+  const followingList = await call("GET", `/users/${test.id}/following`, { token: sara.token });
+  check("GET /relationships/:uid still works", followers.status === 200 && Array.isArray(followers.data));
+  check(
+    "profile followerCount/followingCount are ints matching the lists",
+    me.data.followerCount === followers.data.length &&
+      me.data.followerCount === followerList.data.length &&
+      me.data.followingCount === followingList.data.length &&
+      Number.isInteger(me.data.followingCount),
+    JSON.stringify(me.data)
+  );
+  check(
+    "followers list shape",
+    followerList.status === 200 &&
+      followerList.data.length > 0 &&
+      followerList.data.every((u) => Object.keys(u).sort().join(",") === "name,profileImage,userId") &&
+      followerList.data.some((u) => u.userId === sara.id)
+  );
+  const saraFromTest = await call("GET", `/users/find/${sara.id}`, { token: test.token });
+  const jamesFromTest = await call("GET", `/users/find/${james.id}`, { token: test.token });
+  check(
+    "isFollowing reflects the requester",
+    saraFromTest.data.isFollowing === true && jamesFromTest.data.isFollowing === false
+  );
+  expectStatus(
+    "followers of missing user -> 404",
+    await call("GET", `/users/${MISSING_ID}/followers`, { token: test.token }),
+    404
+  );
+  expectStatus(
+    "followers invalid uuid -> 400",
+    await call("GET", "/users/abc/following", { token: test.token }),
+    400,
+    "Invalid id"
+  );
   expectStatus(
     "update profile without old password -> 400",
     await call("PUT", "/users", { token: test.token, body: { name: "Test User" } }),
@@ -188,10 +260,42 @@ async function main() {
   );
 
   console.log("\nPosts");
-  const feed = await call("GET", "/posts", { token: test.token });
-  check("feed works", feed.status === 200 && Array.isArray(feed.data) && feed.data.length > 0);
+  const feed = await call("GET", "/posts?limit=50", { token: test.token });
+  check(
+    "feed returns { items, nextCursor }",
+    feed.status === 200 && Array.isArray(feed.data.items) && feed.data.items.length > 0 &&
+      "nextCursor" in feed.data
+  );
+  check("feed rows have the rich shape", feed.data.items.every((p) => hasPostShape(p)), JSON.stringify(feed.data.items[0]));
+  check("feed excludes group posts", feed.data.items.every((p) => p.groupId === null && p.groupName === null));
+  const defaultPage = await call("GET", "/posts", { token: test.token });
+  check("feed default limit is 10", defaultPage.status === 200 && defaultPage.data.items.length <= 10);
   const profilePosts = await call("GET", `/posts?userId=${sara.id}`, { token: test.token });
-  check("profile posts work", profilePosts.status === 200 && profilePosts.data.length > 0);
+  check("profile posts work", profilePosts.status === 200 && profilePosts.data.items.length > 0);
+  const omarPosts = await walk(`/posts?userId=${omar.id}`, test.token, 50);
+  check(
+    "profile posts exclude group posts",
+    omarPosts && omarPosts.length > 0 && omarPosts.every((p) => p.groupId === null)
+  );
+
+  const fullFeed = await walk("/posts", test.token, 50);
+  const pagedFeed = await walk("/posts", test.token, 2);
+  const pagedIds = pagedFeed?.map((p) => p.postId) || [];
+  check(
+    "feed limit=2 walks every page with no duplicates",
+    fullFeed && pagedFeed && pagedIds.length === fullFeed.length &&
+      new Set(pagedIds).size === pagedIds.length &&
+      pagedIds.join() === fullFeed.map((p) => p.postId).join(),
+    `${pagedIds.length} vs ${fullFeed?.length}`
+  );
+  const sorted = [...(fullFeed || [])].sort(
+    (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
+  );
+  check("feed is newest first", sorted.map((p) => p.postId).join() === (fullFeed || []).map((p) => p.postId).join());
+  const big = await call("GET", "/posts?limit=500", { token: test.token });
+  check("limit above 50 is capped", big.status === 200 && big.data.items.length <= 50);
+  expectStatus("invalid cursor -> 400", await call("GET", "/posts?cursor=nope", { token: test.token }), 400, "Invalid cursor");
+  expectStatus("invalid limit -> 400", await call("GET", "/posts?limit=abc", { token: test.token }), 400, "Invalid limit");
   expectStatus(
     "posts ?userId invalid -> 400",
     await call("GET", "/posts?userId=abc", { token: test.token }),
@@ -238,6 +342,20 @@ async function main() {
       await call("POST", `/comments/${postId}`, { token: sara.token, body: { description: " hi " } }),
       201
     );
+    expectStatus("like -> 201", await call("POST", `/likes/${postId}`, { token: sara.token }), 201);
+    expectStatus("like twice -> 201", await call("POST", `/likes/${postId}`, { token: sara.token }), 201);
+    const asSara = await findPost(`/posts?userId=${test.id}`, sara.token, postId);
+    const asTest = await findPost(`/posts?userId=${test.id}`, test.token, postId);
+    check(
+      "counts after like + comment (likeCount 1, commentCount 1)",
+      asSara?.likeCount === 1 && asSara?.commentCount === 1,
+      JSON.stringify(asSara)
+    );
+    check("likedByMe true for the liker", asSara?.likedByMe === true);
+    check("likedByMe false for others", asTest?.likedByMe === false);
+    await call("DELETE", `/likes/${postId}`, { token: sara.token });
+    const unliked = await findPost(`/posts?userId=${test.id}`, sara.token, postId);
+    check("unlike -> likeCount 0, likedByMe false", unliked?.likeCount === 0 && unliked?.likedByMe === false);
     expectStatus(
       "someone else deleting the post -> 404",
       await call("DELETE", `/posts/${postId}`, { token: sara.token }),
@@ -251,7 +369,7 @@ async function main() {
     );
     cleanups.pop();
   }
-  const saraPost = profilePosts.data[0];
+  const saraPost = profilePosts.data.items[0];
   expectStatus(
     "deleting someone else's seeded post -> 404",
     await call("DELETE", `/posts/${saraPost.postId}`, { token: test.token }),
@@ -310,7 +428,7 @@ async function main() {
     400,
     "Invalid id"
   );
-  for (const path of ["/groups/joined", "/groups/unjoined", "/groups/save", "/groups/save/ids"]) {
+  for (const path of ["/groups/joined", "/groups/unjoined"]) {
     const r = await call("GET", path, { token: test.token });
     check(`${path} still works`, r.status === 200 && Array.isArray(r.data));
   }
@@ -332,11 +450,18 @@ async function main() {
     NOT_MEMBER
   );
   const bookPosts = await call("GET", `/groups/${books.groupId}/posts`, { token: sara.token });
-  check("member reads group posts", bookPosts.status === 200 && bookPosts.data.length > 0);
-  const bookPostId = bookPosts.data[0].postId;
+  check("member reads group posts", bookPosts.status === 200 && bookPosts.data.items.length > 0);
+  check(
+    "group posts carry groupId/groupName",
+    bookPosts.data.items.every(
+      (p) => hasPostShape(p) && p.groupId === books.groupId && p.groupName === "Book Club"
+    ),
+    JSON.stringify(bookPosts.data.items[0])
+  );
+  const bookPostId = bookPosts.data.items[0].postId;
   expectStatus(
     "non-member comments on group post -> 403",
-    await call("POST", `/groups/${bookPostId}/comments`, {
+    await call("POST", `/comments/${bookPostId}`, {
       token: james.token,
       body: { description: "hi" },
     }),
@@ -345,21 +470,44 @@ async function main() {
   );
   expectStatus(
     "non-member reads group comments -> 403",
-    await call("GET", `/groups/${bookPostId}/comments`, { token: james.token }),
+    await call("GET", `/comments/${bookPostId}`, { token: james.token }),
     403,
     NOT_MEMBER
   );
   expectStatus(
     "non-member likes group post -> 403",
-    await call("POST", `/groups/${bookPostId}/likes`, { token: james.token }),
+    await call("POST", `/likes/${bookPostId}`, { token: james.token }),
+    403,
+    NOT_MEMBER
+  );
+  expectStatus(
+    "non-member reads group likes -> 403",
+    await call("GET", `/likes/${bookPostId}`, { token: james.token }),
     403,
     NOT_MEMBER
   );
   expectStatus(
     "non-member saves group post -> 403",
-    await call("POST", `/groups/save/${bookPostId}`, { token: james.token }),
+    await call("POST", `/save/${bookPostId}`, { token: james.token }),
     403,
     NOT_MEMBER
+  );
+  expectStatus(
+    "old group like endpoint is gone",
+    await call("POST", `/groups/${bookPostId}/likes`, { token: sara.token }),
+    404
+  );
+  expectStatus(
+    "group posts invalid cursor -> 400",
+    await call("GET", `/groups/${books.groupId}/posts?cursor=abc`, { token: sara.token }),
+    400
+  );
+  const fullPhoto = await walk(`/groups/${photo.groupId}/posts`, test.token, 50);
+  const pagedPhoto = await walk(`/groups/${photo.groupId}/posts`, test.token, 1);
+  check(
+    "group posts limit=1 walk matches the full list",
+    fullPhoto && pagedPhoto && fullPhoto.length > 1 &&
+      pagedPhoto.map((p) => p.postId).join() === fullPhoto.map((p) => p.postId).join()
   );
   expectStatus(
     "group post too long -> 400",
@@ -392,11 +540,34 @@ async function main() {
     "double join adds the member once",
     afterJoin.data.memberCount === 3 && afterJoin.data.isMember === true
   );
+  // Saved group posts disappear from the saved list once you leave the group.
+  const unsaveBook = () => call("DELETE", `/save/${bookPostId}`, { token: james.token });
+  cleanups.push(unsaveBook);
+  expectStatus(
+    "member saves group post -> 201",
+    await call("POST", `/save/${bookPostId}`, { token: james.token }),
+    201
+  );
+  const jamesSaved = await walk("/save", james.token, 50);
+  const savedBook = jamesSaved?.find((p) => p.postId === bookPostId);
+  check(
+    "saved group post listed with groupName and savedByMe",
+    savedBook?.groupName === "Book Club" && savedBook?.savedByMe === true &&
+      hasPostShape(savedBook, ["savedAt"]),
+    JSON.stringify(savedBook)
+  );
   expectStatus(
     "leave group -> 204",
     await call("DELETE", `/groups/${books.groupId}`, { token: james.token }),
     204
   );
+  cleanups.splice(cleanups.length - 2, 1); // the leave-group cleanup is done
+  const jamesSavedAfter = await walk("/save", james.token, 50);
+  check(
+    "saved list hides posts from groups you left",
+    jamesSavedAfter && !jamesSavedAfter.some((p) => p.postId === bookPostId)
+  );
+  expectStatus("unsave after leaving still works -> 204", await unsaveBook(), 204);
   cleanups.pop();
   expectStatus(
     "join missing group -> 404",
@@ -412,29 +583,37 @@ async function main() {
   expectStatus("member creates group post -> 201", gp, 201);
   if (gp.status === 201) {
     const gpId = gp.data.postId;
-    cleanups.push(() => call("DELETE", `/groups/posts/${gpId}`, { token: sara.token }));
+    cleanups.push(() => call("DELETE", `/posts/${gpId}`, { token: sara.token }));
     expectStatus(
       "member likes group post -> 201",
-      await call("POST", `/groups/${gpId}/likes`, { token: lina.token }),
+      await call("POST", `/likes/${gpId}`, { token: lina.token }),
       201
     );
     expectStatus(
       "member comments on group post -> 201",
-      await call("POST", `/groups/${gpId}/comments`, {
+      await call("POST", `/comments/${gpId}`, {
         token: lina.token,
         body: { description: "nice" },
       }),
       201
     );
+    const gpRow = await findPost(`/groups/${photo.groupId}/posts`, lina.token, gpId);
+    check(
+      "group post counts + likedByMe",
+      gpRow?.likeCount === 1 && gpRow?.commentCount === 1 && gpRow?.likedByMe === true,
+      JSON.stringify(gpRow)
+    );
+    const saraFeed = await walk("/posts", sara.token, 50);
+    check("new group post not in author's feed", saraFeed && !saraFeed.some((p) => p.postId === gpId));
     expectStatus(
       "non-author non-creator deletes group post -> 404",
-      await call("DELETE", `/groups/posts/${gpId}`, { token: lina.token }),
+      await call("DELETE", `/posts/${gpId}`, { token: lina.token }),
       404,
       "Not found or not yours"
     );
     expectStatus(
       "group creator deletes member's post -> 204",
-      await call("DELETE", `/groups/posts/${gpId}`, { token: omar.token }),
+      await call("DELETE", `/posts/${gpId}`, { token: omar.token }),
       204
     );
     cleanups.pop();
@@ -449,9 +628,26 @@ async function main() {
   console.log("\nSaved");
   const savedIds = await call("GET", "/save/ids", { token: test.token });
   const saved = await call("GET", "/save", { token: test.token });
-  check("GET /save works", saved.status === 200 && Array.isArray(saved.data));
+  check("GET /save works", saved.status === 200 && Array.isArray(saved.data.items));
+  check(
+    "saved rows: rich shape + savedAt, all savedByMe",
+    saved.data.items.length > 0 &&
+      saved.data.items.every((p) => hasPostShape(p, ["savedAt"]) && p.savedByMe === true),
+    JSON.stringify(saved.data.items[0])
+  );
+  check(
+    "saved includes group posts with groupName",
+    saved.data.items.some((p) => p.groupId && p.groupName)
+  );
   check("GET /save/ids works", savedIds.status === 200 && Array.isArray(savedIds.data));
-  const toSave = feed.data.find((p) => !savedIds.data.includes(p.postId));
+  const fullSaved = await walk("/save", test.token, 50);
+  const pagedSaved = await walk("/save", test.token, 1);
+  check(
+    "saved limit=1 walk matches the full list",
+    fullSaved && pagedSaved && fullSaved.length > 1 &&
+      pagedSaved.map((p) => p.postId).join() === fullSaved.map((p) => p.postId).join()
+  );
+  const toSave = feed.data.items.find((p) => !savedIds.data.includes(p.postId));
   if (toSave) {
     cleanups.push(() => call("DELETE", `/save/${toSave.postId}`, { token: test.token }));
     expectStatus(
@@ -461,10 +657,14 @@ async function main() {
     );
     const after = await call("GET", "/save/ids", { token: test.token });
     check("saved id listed", after.data.includes(toSave.postId));
+    const savedRow = await findPost("/posts", test.token, toSave.postId);
+    check("savedByMe true in feed after saving", savedRow?.savedByMe === true);
+    const firstSaved = (await call("GET", "/save?limit=1", { token: test.token })).data.items[0];
+    check("saved list is ordered by savedAt (newest save first)", firstSaved?.postId === toSave.postId);
     expectStatus(
-      "unsave post -> 200",
+      "unsave post -> 204",
       await call("DELETE", `/save/${toSave.postId}`, { token: test.token }),
-      200
+      204
     );
     cleanups.pop();
   }

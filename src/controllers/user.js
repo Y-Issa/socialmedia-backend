@@ -1,8 +1,11 @@
 import bcrypt from "bcrypt";
 import pool from "../../db.js";
 import {
+  getFollowersQuery,
+  getFollowingQuery,
   getUserByIdQuery,
   getUserPasswordQuery,
+  getUserProfileQuery,
   updateUserQuery,
 } from "../queries.js";
 import { cleanString, optionalString } from "../utils/validate.js";
@@ -10,12 +13,14 @@ import { cleanString, optionalString } from "../utils/validate.js";
 const SALT_ROUNDS = 10;
 const MIN_PASSWORD_LENGTH = 6;
 
+// Profile plus followerCount, followingCount and isFollowing (whether the
+// requester follows this user).
 export async function getUser(req, res) {
   const { uid } = req.params;
   const { id } = req.userInfo;
 
   try {
-    const result = await pool.query(getUserByIdQuery, [uid]);
+    const result = await pool.query(getUserProfileQuery, [uid, id]);
     const user = result.rows[0];
     if (!user) {
       return res.status(404).send("User not found");
@@ -31,6 +36,29 @@ export async function getUser(req, res) {
     res.status(500).send("Server error");
   }
 }
+
+// GET /api/users/:uid/followers and /following -> [{ userId, name, profileImage }]
+// (at most 100, by name).
+function listRelations(query, label) {
+  return async (req, res) => {
+    const { uid } = req.params;
+
+    try {
+      const user = await pool.query(getUserByIdQuery, [uid]);
+      if (user.rows.length === 0) {
+        return res.status(404).send("User not found");
+      }
+      const result = await pool.query(query, [uid]);
+      res.status(200).json(result.rows);
+    } catch (error) {
+      console.error(`${label}:`, error);
+      res.status(500).send("Server error");
+    }
+  };
+}
+
+export const getFollowers = listRelations(getFollowersQuery, "getFollowers");
+export const getFollowing = listRelations(getFollowingQuery, "getFollowing");
 
 export async function updateUser(req, res) {
   const body = req.body || {};

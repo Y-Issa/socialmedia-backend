@@ -7,7 +7,7 @@ const router = express.Router();
 
 router.param("postId", validateIdParam);
 
-router.get("/:postId", getLikes);
+router.get("/:postId", verifyToken, getLikes);
 router.post("/:postId", verifyToken, createLike);
 router.delete("/:postId", verifyToken, deleteLike);
 
