@@ -1,6 +1,13 @@
-import { createLikeQuery, deleteLikeQuery, getLikesQuery } from "../queries.js";
+import {
+  createLikeQuery,
+  deleteLikeQuery,
+  getLikesQuery,
+  notifyLikeQuery,
+  unnotifyLikeQuery,
+} from "../queries.js";
 import pool from "../../db.js";
 import { ensurePostAccess } from "../utils/access.js";
+import { notify } from "../utils/notify.js";
 
 // Ids of the users who liked the post. Group posts: members only.
 export async function getLikes(req, res) {
@@ -25,6 +32,7 @@ export async function createLike(req, res) {
     if (!(await ensurePostAccess(res, postId, userInfo.id))) return;
 
     const result = await pool.query(createLikeQuery, [postId, userInfo.id]);
+    await notify(notifyLikeQuery, [postId, userInfo.id]);
     res.status(201).json(result.rows[0] ?? null);
   } catch (error) {
     console.error("createLike:", error);
@@ -39,6 +47,7 @@ export async function deleteLike(req, res) {
 
   try {
     await pool.query(deleteLikeQuery, [postId, userInfo.id]);
+    await notify(unnotifyLikeQuery, [postId, userInfo.id]);
     res.status(204).send();
   } catch (error) {
     console.error("deleteLike:", error);

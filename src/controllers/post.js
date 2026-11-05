@@ -2,7 +2,10 @@ import pool from "../../db.js";
 import {
   createPostQuery,
   deletePostQuery,
+  editPostQuery,
   getFeedQuery,
+  getOwnPostQuery,
+  getPostRowQuery,
   getUserPostsQuery,
 } from "../queries.js";
 import {
@@ -78,6 +81,33 @@ export async function deletePost(req, res) {
     res.status(204).send();
   } catch (error) {
     console.error("deletePost:", error);
+    res.status(500).send("Server error");
+  }
+}
+
+// PATCH /api/posts/:postId { description } -> 200 rich post row (with
+// editedAt). Author only; same rules as creating a post, so a post without
+// an image can't be emptied.
+export async function editPost(req, res) {
+  const { postId } = req.params;
+  const { id } = req.userInfo;
+  const description = cleanString(req.body?.description);
+
+  try {
+    const own = await pool.query(getOwnPostQuery, [postId, id]);
+    if (own.rows.length === 0) {
+      return res.status(404).send("Not found or not yours");
+    }
+    const invalid = postError(description, own.rows[0].image);
+    if (invalid) {
+      return res.status(400).send(invalid);
+    }
+
+    await pool.query(editPostQuery, [description, postId, id]);
+    const result = await pool.query(getPostRowQuery, [id, postId]);
+    res.status(200).json(result.rows[0]);
+  } catch (error) {
+    console.error("editPost:", error);
     res.status(500).send("Server error");
   }
 }

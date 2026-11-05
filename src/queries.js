@@ -5,14 +5,14 @@
 export const checkEmailExistsQuery =
   "SELECT * FROM users WHERE LOWER(email) = LOWER($1)";
 
-export const createUserQuery = `INSERT INTO users (name,email,password) VALUES ($1,$2,$3) RETURNING "userId", name, email, "coverImage", "profileImage", city, website`;
+export const createUserQuery = `INSERT INTO users (name,email,password) VALUES ($1,$2,$3) RETURNING "userId", name, email, "coverImage", "profileImage", city, website, bio, "createdAt"`;
 
 // Public profile columns (no password). Email is removed by the controller
 // unless the requester is looking at their own profile.
-export const getUserByIdQuery = `SELECT "userId", name, email, "coverImage", "profileImage", city, website FROM users WHERE "userId" = $1`;
+export const getUserByIdQuery = `SELECT "userId", name, email, "coverImage", "profileImage", city, website, bio, "createdAt" FROM users WHERE "userId" = $1`;
 
 // Profile with follow counts; $2 is the viewer (for isFollowing).
-export const getUserProfileQuery = `SELECT U."userId", U.name, U.email, U."coverImage", U."profileImage", U.city, U.website,
+export const getUserProfileQuery = `SELECT U."userId", U.name, U.email, U."coverImage", U."profileImage", U.city, U.website, U.bio, U."createdAt",
   (SELECT COUNT(*)::int FROM relationships R WHERE R."followedUserId" = U."userId") AS "followerCount",
   (SELECT COUNT(*)::int FROM relationships R WHERE R."followerUserId" = U."userId") AS "followingCount",
   EXISTS (SELECT 1 FROM relationships R WHERE R."followerUserId" = $2 AND R."followedUserId" = U."userId") AS "isFollowing"
@@ -24,7 +24,10 @@ export const getFollowingQuery = `SELECT U."userId", U.name, U."profileImage" FR
 
 export const getUserPasswordQuery = `SELECT password FROM users WHERE "userId" = $1`;
 
-export const updateUserQuery = `UPDATE users SET name = $1, city = $2, website = $3, password = $4, "profileImage" = $5, "coverImage" = $6 WHERE "userId" = $7 RETURNING "userId", name, email, "coverImage", "profileImage", city, website`;
+// $8 says whether the request sent a bio; when it didn't, the bio is kept.
+export const updateUserQuery = `UPDATE users SET name = $1, city = $2, website = $3, password = $4, "profileImage" = $5, "coverImage" = $6,
+  bio = CASE WHEN $8::boolean THEN $9 ELSE bio END
+  WHERE "userId" = $7 RETURNING "userId", name, email, "coverImage", "profileImage", city, website, bio, "createdAt"`;
 
 // Post queries
 //
@@ -41,7 +44,7 @@ export const updateUserQuery = `UPDATE users SET name = $1, city = $2, website =
 const isoUtc = (column) =>
   `to_char(${column} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 
-const POST_COLUMNS = `P."postId", P.description, P.image, P."createdAt", P."userId",
+const POST_COLUMNS = `P."postId", P.description, P.image, P."createdAt", P."editedAt", P."userId",
   U.name, U."profileImage", P."groupId", G.name AS "groupName",
   (SELECT COUNT(*)::int FROM likes L WHERE L."postId" = P."postId") AS "likeCount",
   (SELECT COUNT(*)::int FROM comments C WHERE C."postId" = P."postId") AS "commentCount",
@@ -91,6 +94,14 @@ export const createPostQuery = `INSERT INTO posts (description, image, "userId")
 
 export const createGroupPostQuery = `INSERT INTO posts (description, image, "userId", "groupId") VALUES ($1, $2, $3, $4) RETURNING *`;
 
+// One rich post row; $1 viewer, $2 postId.
+export const getPostRowQuery = `SELECT ${POST_COLUMNS} ${POST_FROM} WHERE P."postId" = $2`;
+
+// The post's image if $2 wrote it (used to validate an edit).
+export const getOwnPostQuery = `SELECT image FROM posts WHERE "postId" = $1 AND "userId" = $2`;
+
+export const editPostQuery = `UPDATE posts SET description = $1, "editedAt" = CURRENT_TIMESTAMP WHERE "postId" = $2 AND "userId" = $3`;
+
 // The author can delete any of their posts; a group's creator can also
 // delete posts made in that group.
 export const deletePostQuery = `DELETE FROM posts P WHERE P."postId" = $1 AND (P."userId" = $2 OR EXISTS (SELECT 1 FROM groups G WHERE G."groupId" = P."groupId" AND G."createdBy" = $2))`;
@@ -101,9 +112,14 @@ export const postAccessQuery = `SELECT P."groupId", (P."groupId" IS NULL OR EXIS
 
 // Comment queries
 
-export const getCommentsQuery = `SELECT C.*, name, "profileImage" FROM comments C JOIN users U ON C."userId" = U."userId" WHERE "postId" = $1 ORDER BY C."createdAt" DESC`;
+export const getCommentsQuery = `SELECT C."commentId", C."userId", C."postId", C.description, C."createdAt", U.name, U."profileImage"
+  FROM comments C JOIN users U ON C."userId" = U."userId" WHERE C."postId" = $1 ORDER BY C."createdAt" DESC`;
 
 export const createCommentQuery = `INSERT INTO comments (description, "postId", "userId") VALUES ($1, $2, $3) RETURNING *`;
+
+// The comment's author or the post's author may delete a comment.
+export const deleteCommentQuery = `DELETE FROM comments C WHERE C."commentId" = $1
+  AND (C."userId" = $2 OR EXISTS (SELECT 1 FROM posts P WHERE P."postId" = C."postId" AND P."userId" = $2))`;
 
 // Like queries
 
@@ -152,3 +168,106 @@ export const joinGroupQuery = `INSERT INTO group_members ("groupId", "userId") V
 export const leaveGroupQuery = `DELETE FROM group_members WHERE "groupId" = $1 AND "userId" = $2`;
 
 export const getGroupMembersQuery = `SELECT U."userId", U.name, U."profileImage" FROM users U JOIN group_members M ON U."userId" = M."userId" WHERE M."groupId" = $1`;
+
+// Notification queries
+//
+// Inserts never notify the actor about their own action and use
+// ON CONFLICT DO NOTHING with the partial unique indexes on like / follow /
+// group_join, so repeating an action never stacks duplicates.
+
+// $1 postId, $2 actor
+export const notifyLikeQuery = `INSERT INTO notifications ("recipientId", "actorId", type, "postId")
+  SELECT P."userId", $2, 'like', P."postId" FROM posts P WHERE P."postId" = $1 AND P."userId" <> $2
+  ON CONFLICT DO NOTHING`;
+
+// $1 postId, $2 actor, $3 commentId
+export const notifyCommentQuery = `INSERT INTO notifications ("recipientId", "actorId", type, "postId", "commentId")
+  SELECT P."userId", $2, 'comment', P."postId", $3 FROM posts P WHERE P."postId" = $1 AND P."userId" <> $2
+  ON CONFLICT DO NOTHING`;
+
+// $1 followed user, $2 actor
+export const notifyFollowQuery = `INSERT INTO notifications ("recipientId", "actorId", type)
+  SELECT $1, $2, 'follow' WHERE $1::uuid <> $2::uuid
+  ON CONFLICT DO NOTHING`;
+
+// $1 groupId, $2 actor; the group's creator is notified.
+export const notifyGroupJoinQuery = `INSERT INTO notifications ("recipientId", "actorId", type, "groupId")
+  SELECT G."createdBy", $2, 'group_join', G."groupId" FROM groups G
+  WHERE G."groupId" = $1 AND G."createdBy" IS NOT NULL AND G."createdBy" <> $2
+  ON CONFLICT DO NOTHING`;
+
+export const unnotifyLikeQuery = `DELETE FROM notifications WHERE type = 'like' AND "postId" = $1 AND "actorId" = $2`;
+export const unnotifyFollowQuery = `DELETE FROM notifications WHERE type = 'follow' AND "recipientId" = $1 AND "actorId" = $2`;
+export const unnotifyGroupJoinQuery = `DELETE FROM notifications WHERE type = 'group_join' AND "groupId" = $1 AND "actorId" = $2`;
+
+// $1 recipient, $2 cursor createdAt, $3 cursor notificationId, $4 page size.
+export const getNotificationsQuery = `SELECT N."notificationId", N.type, N."createdAt", N."readAt",
+  json_build_object('userId', A."userId", 'name', A.name, 'profileImage', A."profileImage") AS actor,
+  CASE WHEN P."postId" IS NULL THEN NULL ELSE json_build_object(
+    'postId', P."postId", 'excerpt', NULLIF(LEFT(P.description, 80), ''), 'groupId', P."groupId") END AS post,
+  CASE WHEN G."groupId" IS NULL THEN NULL ELSE json_build_object('groupId', G."groupId", 'name', G.name) END AS "group",
+  CASE WHEN C."commentId" IS NULL THEN NULL ELSE json_build_object(
+    'commentId', C."commentId", 'excerpt', LEFT(C.description, 80)) END AS comment,
+  ${isoUtc('N."createdAt"')} AS "cursorKey"
+  FROM notifications N
+  JOIN users A ON A."userId" = N."actorId"
+  LEFT JOIN posts P ON P."postId" = N."postId"
+  LEFT JOIN groups G ON G."groupId" = N."groupId"
+  LEFT JOIN comments C ON C."commentId" = N."commentId"
+  WHERE N."recipientId" = $1
+    AND ($2::timestamptz IS NULL OR (N."createdAt", N."notificationId") < ($2::timestamptz, $3::uuid))
+  ORDER BY N."createdAt" DESC, N."notificationId" DESC LIMIT $4`;
+
+export const unreadCountQuery = `SELECT COUNT(*)::int AS count FROM notifications WHERE "recipientId" = $1 AND "readAt" IS NULL`;
+
+export const markAllReadQuery = `UPDATE notifications SET "readAt" = CURRENT_TIMESTAMP WHERE "recipientId" = $1 AND "readAt" IS NULL`;
+
+export const markReadQuery = `UPDATE notifications SET "readAt" = CURRENT_TIMESTAMP
+  WHERE "recipientId" = $1 AND "readAt" IS NULL AND "notificationId" = ANY($2::uuid[])`;
+
+// Search queries
+//
+// $1 viewer, $2 search text, $3 LIKE pattern ('%text%', wildcards escaped),
+// $4 LIMIT. A row matches on a substring (ILIKE, served by the trigram GIN
+// indexes) or trigram similarity; prefix matches rank first.
+
+export const searchUsersQuery = `SELECT U."userId", U.name, U."profileImage", U.city,
+  EXISTS (SELECT 1 FROM relationships R WHERE R."followerUserId" = $1 AND R."followedUserId" = U."userId") AS "isFollowing"
+  FROM users U
+  WHERE U.name ILIKE $3 OR U.name % $2
+  ORDER BY (U.name ILIKE $5) DESC, similarity(U.name, $2) DESC, U.name, U."userId"
+  LIMIT $4`;
+
+export const searchGroupsQuery = `SELECT G."groupId", G.name, G.description, G.image,
+  (SELECT COUNT(*)::int FROM group_members M WHERE M."groupId" = G."groupId") AS "memberCount",
+  EXISTS (SELECT 1 FROM group_members M WHERE M."groupId" = G."groupId" AND M."userId" = $1) AS "isMember"
+  FROM groups G
+  WHERE G.name ILIKE $3 OR G.name % $2
+  ORDER BY (G.name ILIKE $5) DESC, similarity(G.name, $2) DESC, G.name, G."groupId"
+  LIMIT $4`;
+
+// Rich post rows, newest first. Group posts only for the group's members.
+export const searchPostsQuery = `SELECT ${POST_COLUMNS}
+  ${POST_FROM}
+  WHERE (P.description ILIKE $3 OR $2 <% P.description)
+    AND (P."groupId" IS NULL OR EXISTS (SELECT 1 FROM group_members M WHERE M."groupId" = P."groupId" AND M."userId" = $1))
+  ORDER BY P."createdAt" DESC, P."postId" DESC
+  LIMIT $4`;
+
+// Suggestions: users $1 doesn't follow (never $1). Friends of friends first
+// (by mutualCount), then by follower count, then newest accounts.
+// "mutualName" is one of the people $1 follows who follows the candidate.
+export const suggestionsQuery = `WITH mine AS (
+    SELECT "followedUserId" AS id FROM relationships WHERE "followerUserId" = $1
+  )
+  SELECT U."userId", U.name, U."profileImage", U.city,
+    (SELECT COUNT(*)::int FROM relationships R
+       WHERE R."followedUserId" = U."userId" AND R."followerUserId" IN (SELECT id FROM mine)) AS "mutualCount",
+    (SELECT M.name FROM relationships R JOIN users M ON M."userId" = R."followerUserId"
+       WHERE R."followedUserId" = U."userId" AND R."followerUserId" IN (SELECT id FROM mine)
+       ORDER BY M.name LIMIT 1) AS "mutualName",
+    (SELECT COUNT(*)::int FROM relationships R WHERE R."followedUserId" = U."userId") AS "followerCount"
+  FROM users U
+  WHERE U."userId" <> $1 AND U."userId" NOT IN (SELECT id FROM mine)
+  ORDER BY "mutualCount" DESC, "followerCount" DESC, U."createdAt" DESC, U."userId"
+  LIMIT $2`;

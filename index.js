@@ -12,6 +12,8 @@ import authRouter from "./src/routes/auth.js";
 import relationshipsRouter from "./src/routes/relationships.js";
 import saveRouter from "./src/routes/save.js";
 import groupsRouter from "./src/routes/groups.js";
+import notificationsRouter from "./src/routes/notifications.js";
+import searchRouter from "./src/routes/search.js";
 
 const app = express();
 const PORT = process.env.PORT || 8001;
@@ -47,6 +49,8 @@ app.use("/api/auth", authRouter);
 app.use("/api/relationships", relationshipsRouter);
 app.use("/api/save", saveRouter);
 app.use("/api/groups", groupsRouter);
+app.use("/api/notifications", notificationsRouter);
+app.use("/api/search", searchRouter);
 
 // Unknown API routes.
 app.use("/api", (req, res) => {

@@ -1,5 +1,10 @@
 import express from "express";
-import { createPost, getPosts, deletePost } from "../controllers/post.js";
+import {
+  createPost,
+  deletePost,
+  editPost,
+  getPosts,
+} from "../controllers/post.js";
 import { verifyToken } from "../middleware/jwtMiddleware.js";
 import { validateIdParam } from "../utils/validate.js";
 
@@ -9,6 +14,7 @@ router.param("postId", validateIdParam);
 
 router.get("/", verifyToken, getPosts);
 router.post("/", verifyToken, createPost);
+router.patch("/:postId", verifyToken, editPost);
 router.delete("/:postId", verifyToken, deletePost);
 
 export default router;

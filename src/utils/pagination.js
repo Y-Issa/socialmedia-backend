@@ -30,8 +30,9 @@ export function decodeCursor(cursor) {
 }
 
 // Parses ?limit and ?cursor. Returns { error } or { limit, at, postId }.
-export function parsePage(query = {}) {
-  let limit = DEFAULT_LIMIT;
+// (postId is the cursor's row id; other lists use it for their own id.)
+export function parsePage(query = {}, defaultLimit = DEFAULT_LIMIT) {
+  let limit = defaultLimit;
   if (query.limit !== undefined && query.limit !== "") {
     const n = Number(query.limit);
     if (!Number.isInteger(n) || n < 1) return { error: "Invalid limit" };
@@ -54,14 +55,15 @@ export function pageParams(viewerId, page) {
   return [viewerId, page.at, page.postId, page.limit + 1];
 }
 
-// Turns the fetched rows into { items, nextCursor }.
-export function toPage(rows, limit) {
+// Turns the fetched rows into { items, nextCursor }. idKey is the row's
+// tie-breaker id column.
+export function toPage(rows, limit, idKey = "postId") {
   const hasMore = rows.length > limit;
   const pageRows = hasMore ? rows.slice(0, limit) : rows;
   const last = pageRows[pageRows.length - 1];
   const items = pageRows.map(({ cursorKey, ...post }) => post);
   return {
     items,
-    nextCursor: hasMore ? encodeCursor(last.cursorKey, last.postId) : null,
+    nextCursor: hasMore ? encodeCursor(last.cursorKey, last[idKey]) : null,
   };
 }

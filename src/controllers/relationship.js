@@ -2,9 +2,12 @@ import {
   createRelationshipQuery,
   deleteRelationshipQuery,
   getRelationshipsQuery,
+  notifyFollowQuery,
+  unnotifyFollowQuery,
 } from "../queries.js";
 import pool from "../../db.js";
 import { isForeignKeyViolation } from "../utils/validate.js";
+import { notify } from "../utils/notify.js";
 
 export async function getRelationships(req, res) {
   const { uid } = req.params;
@@ -28,6 +31,7 @@ export async function createRelationship(req, res) {
 
   try {
     await pool.query(createRelationshipQuery, [userInfo.id, uid]);
+    await notify(notifyFollowQuery, [uid, userInfo.id]);
     res.status(201).send("Relationship created");
   } catch (error) {
     if (isForeignKeyViolation(error)) {
@@ -44,6 +48,7 @@ export async function deleteRelationship(req, res) {
 
   try {
     await pool.query(deleteRelationshipQuery, [userInfo.id, uid]);
+    await notify(unnotifyFollowQuery, [uid, userInfo.id]);
     res.status(200).send("Relationship deleted");
   } catch (error) {
     console.error("deleteRelationship:", error);

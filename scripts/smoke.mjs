@@ -1,4 +1,4 @@
-// Smoke test for the Phase 1 + Phase 2 API. Needs the API running and seeded data.
+// Smoke test for the Phase 1, 2 and 4 API. Needs the API running and seeded data.
 //
 //   node scripts/smoke.mjs
 //   API_URL=http://localhost:8002/api node scripts/smoke.mjs
@@ -73,7 +73,7 @@ async function walk(path, token, limit) {
 }
 
 const POST_KEYS =
-  "commentCount,createdAt,description,groupId,groupName,image,likeCount,likedByMe,name,postId,profileImage,savedByMe,userId";
+  "commentCount,createdAt,description,editedAt,groupId,groupName,image,likeCount,likedByMe,name,postId,profileImage,savedByMe,userId";
 
 function hasPostShape(post, extra = []) {
   return (
@@ -105,10 +105,10 @@ async function main() {
   console.log(`Smoke testing ${API}\n`);
 
   const users = {};
-  for (const who of ["test", "sara", "omar", "lina", "james"]) {
+  for (const who of ["test", "sara", "omar", "lina", "james", "mona"]) {
     users[who] = await login(who);
   }
-  const { test, sara, omar, lina, james } = users;
+  const { test, sara, omar, lina, james, mona } = users;
 
   const joined = (await call("GET", "/groups/joined", { token: test.token })).data;
   const saraGroups = (await call("GET", "/groups/joined", { token: sara.token })).data;
@@ -673,6 +673,402 @@ async function main() {
     await call("POST", `/save/${MISSING_ID}`, { token: test.token }),
     404
   );
+  console.log("\nNotifications");
+  const NOTIF_KEYS = "actor,comment,createdAt,group,notificationId,post,readAt,type";
+  const unread = async (who) =>
+    (await call("GET", "/notifications/unread-count", { token: who.token })).data.count;
+  const notifs = async (who) =>
+    (await call("GET", "/notifications?limit=50", { token: who.token })).data.items || [];
+
+  const monaBase = await unread(mona);
+  check("unread-count returns { count }", Number.isInteger(monaBase));
+  const monaPost = await call("POST", "/posts", {
+    token: mona.token,
+    body: { description: "Smoke notification post ".repeat(5) },
+  });
+  expectStatus("recipient creates a post -> 201", monaPost, 201);
+  if (monaPost.status === 201) {
+    const mpId = monaPost.data.postId;
+    // Deleting the post also deletes its notifications (FK cascade).
+    cleanups.push(() => call("DELETE", `/posts/${mpId}`, { token: mona.token }));
+    const likeNotifs = async () =>
+      (await notifs(mona)).filter(
+        (n) => n.type === "like" && n.post?.postId === mpId && n.actor.userId === sara.id
+      );
+
+    await call("POST", `/likes/${mpId}`, { token: sara.token });
+    check("like -> unread count +1", (await unread(mona)) === monaBase + 1);
+    const first = (await notifs(mona))[0];
+    check(
+      "like notification shape",
+      first &&
+        Object.keys(first).sort().join(",") === NOTIF_KEYS &&
+        first.type === "like" &&
+        first.readAt === null &&
+        Object.keys(first.actor).sort().join(",") === "name,profileImage,userId" &&
+        first.actor.userId === sara.id &&
+        first.post.postId === mpId &&
+        first.post.groupId === null &&
+        first.post.excerpt === monaPost.data.description.slice(0, 80) &&
+        first.group === null &&
+        first.comment === null,
+      JSON.stringify(first)
+    );
+    await call("POST", `/likes/${mpId}`, { token: sara.token });
+    check("liking twice doesn't add a notification", (await unread(mona)) === monaBase + 1);
+    await call("DELETE", `/likes/${mpId}`, { token: sara.token });
+    check(
+      "unlike removes the like notification",
+      (await unread(mona)) === monaBase && (await likeNotifs()).length === 0
+    );
+    await call("POST", `/likes/${mpId}`, { token: sara.token });
+    check("like -> unlike -> like leaves exactly one", (await likeNotifs()).length === 1);
+    await call("POST", `/likes/${mpId}`, { token: mona.token });
+    check(
+      "liking your own post -> no notification",
+      (await unread(mona)) === monaBase + 1 &&
+        !(await notifs(mona)).some((n) => n.actor.userId === mona.id)
+    );
+
+    const comment = await call("POST", `/comments/${mpId}`, {
+      token: sara.token,
+      body: { description: "Smoke comment" },
+    });
+    const commentNotif = (await notifs(mona)).find((n) => n.type === "comment");
+    check(
+      "comment -> notification with comment excerpt",
+      commentNotif?.comment?.commentId === comment.data.commentId &&
+        commentNotif.comment.excerpt === "Smoke comment" &&
+        commentNotif.post.postId === mpId &&
+        commentNotif.actor.userId === sara.id,
+      JSON.stringify(commentNotif)
+    );
+    await call("POST", `/comments/${mpId}`, {
+      token: mona.token,
+      body: { description: "my own comment" },
+    });
+    check("commenting on your own post -> no notification", (await unread(mona)) === monaBase + 2);
+
+    cleanups.push(() => call("DELETE", `/relationships/${mona.id}`, { token: james.token }));
+    await call("POST", `/relationships/${mona.id}`, { token: james.token });
+    const followNotif = (await notifs(mona)).find(
+      (n) => n.type === "follow" && n.actor.userId === james.id
+    );
+    check(
+      "follow -> notification",
+      followNotif && followNotif.post === null && followNotif.group === null &&
+        (await unread(mona)) === monaBase + 3
+    );
+    await call("DELETE", `/relationships/${mona.id}`, { token: james.token });
+    cleanups.pop();
+    check(
+      "unfollow removes the follow notification",
+      !(await notifs(mona)).some((n) => n.type === "follow" && n.actor.userId === james.id) &&
+        (await unread(mona)) === monaBase + 2
+    );
+
+    const pagedNotifs = await walk("/notifications", mona.token, 1);
+    const allNotifs = await walk("/notifications", mona.token, 50);
+    check(
+      "notifications limit=1 walk matches the full list, newest first",
+      pagedNotifs && allNotifs && allNotifs.length >= 2 &&
+        pagedNotifs.map((n) => n.notificationId).join() ===
+          allNotifs.map((n) => n.notificationId).join() &&
+        allNotifs.every((n, i) => i === 0 || new Date(allNotifs[i - 1].createdAt) >= new Date(n.createdAt))
+    );
+    expectStatus(
+      "notifications invalid cursor -> 400",
+      await call("GET", "/notifications?cursor=abc", { token: mona.token }),
+      400
+    );
+
+    expectStatus(
+      "mark read with invalid ids -> 400",
+      await call("POST", "/notifications/read", { token: mona.token, body: { ids: ["x"] } }),
+      400
+    );
+    const target = (await notifs(mona)).find((n) => n.readAt === null);
+    expectStatus(
+      "someone else marking your notification read -> 204 (ignored)",
+      await call("POST", "/notifications/read", {
+        token: sara.token,
+        body: { ids: [target.notificationId] },
+      }),
+      204
+    );
+    check("other user's mark-read has no effect", (await unread(mona)) === monaBase + 2);
+    expectStatus(
+      "mark one read -> 204",
+      await call("POST", "/notifications/read", {
+        token: mona.token,
+        body: { ids: [target.notificationId] },
+      }),
+      204
+    );
+    const marked = (await notifs(mona)).find((n) => n.notificationId === target.notificationId);
+    check(
+      "marked notification has readAt, count -1",
+      marked?.readAt !== null && (await unread(mona)) === monaBase + 1
+    );
+    // Only mark everything read when the recipient had no unread seed data.
+    if (monaBase === 0) {
+      expectStatus(
+        "mark all read -> 204",
+        await call("POST", "/notifications/read", { token: mona.token, body: {} }),
+        204
+      );
+      check("unread count 0 after mark all", (await unread(mona)) === 0);
+    }
+  }
+
+  cleanups.push(() => call("DELETE", `/groups/${photo.groupId}`, { token: james.token }));
+  await call("POST", `/groups/${photo.groupId}`, { token: james.token });
+  const joinNotif = (await notifs(omar)).find(
+    (n) => n.type === "group_join" && n.actor.userId === james.id && n.group?.groupId === photo.groupId
+  );
+  check(
+    "group join -> notification for the creator",
+    joinNotif?.group?.name === "Photography" && joinNotif.post === null,
+    JSON.stringify(joinNotif)
+  );
+  await call("DELETE", `/groups/${photo.groupId}`, { token: james.token });
+  cleanups.pop();
+  check(
+    "leaving removes the join notification",
+    !(await notifs(omar)).some(
+      (n) => n.type === "group_join" && n.actor.userId === james.id && n.group?.groupId === photo.groupId
+    )
+  );
+  expectStatus("notifications need a token -> 401", await call("GET", "/notifications"), 401);
+
+  console.log("\nSearch");
+  const sUsers = await call("GET", "/search?q=sara&type=users", { token: test.token });
+  const sSara = sUsers.data.users?.find((x) => x.userId === sara.id);
+  check(
+    "search users finds Sara with isFollowing",
+    sUsers.status === 200 &&
+      Object.keys(sUsers.data).join() === "users" &&
+      Object.keys(sSara || {}).sort().join(",") === "city,isFollowing,name,profileImage,userId" &&
+      sSara.isFollowing === true,
+    JSON.stringify(sUsers.data)
+  );
+  const sPosts = await call("GET", "/search?q=mountains&type=posts", { token: test.token });
+  check(
+    "search posts finds a seeded post (rich rows)",
+    sPosts.status === 200 &&
+      sPosts.data.posts.length > 0 &&
+      sPosts.data.posts.every((p) => hasPostShape(p)) &&
+      sPosts.data.posts.some((p) => p.userId === omar.id),
+    JSON.stringify(sPosts.data).slice(0, 200)
+  );
+  const sGroups = await call("GET", "/search?q=photo&type=groups", { token: test.token });
+  const sPhoto = sGroups.data.groups?.find((g) => g.groupId === photo.groupId);
+  check(
+    "search groups finds Photography",
+    Object.keys(sPhoto || {}).sort().join(",") ===
+      "description,groupId,image,isMember,memberCount,name" &&
+      sPhoto.isMember === true && sPhoto.memberCount === 4,
+    JSON.stringify(sGroups.data)
+  );
+  const sAll = await call("GET", "/search?q=a", { token: test.token });
+  check(
+    "type=all returns users/posts/groups, at most 5 each",
+    sAll.status === 200 &&
+      ["users", "posts", "groups"].every(
+        (k) => Array.isArray(sAll.data[k]) && sAll.data[k].length <= 5
+      ) &&
+      sAll.data.posts.length > 0
+  );
+  const midnightMember = await call("GET", "/search?q=midnight library&type=posts", { token: sara.token });
+  const midnightOther = await call("GET", "/search?q=midnight library&type=posts", { token: james.token });
+  check(
+    "group posts are searchable by members",
+    midnightMember.data.posts?.some((p) => p.groupId === books.groupId)
+  );
+  check(
+    "group posts hidden from non-members",
+    midnightOther.status === 200 && !midnightOther.data.posts.some((p) => p.groupId === books.groupId)
+  );
+  const wildcard = await call("GET", "/search?q=%25&type=users", { token: test.token });
+  check("LIKE wildcards are literal", wildcard.status === 200 && wildcard.data.users.length === 0);
+  for (const [label, path] of [
+    ["empty q -> 400", "/search?q="],
+    ["blank q -> 400", "/search?q=%20%20"],
+    ["missing q -> 400", "/search"],
+    ["101-char q -> 400", `/search?q=${"a".repeat(101)}`],
+  ]) {
+    expectStatus(label, await call("GET", path, { token: test.token }), 400, "Search query is required");
+  }
+  expectStatus(
+    "bad type -> 400",
+    await call("GET", "/search?q=a&type=bogus", { token: test.token }),
+    400
+  );
+
+  console.log("\nSuggestions");
+  const sugg = await call("GET", "/users/suggestions", { token: test.token });
+  const followingIds = (await call("GET", `/users/${test.id}/following`, { token: test.token })).data.map((x) => x.userId);
+  check(
+    "suggestions shape",
+    sugg.status === 200 && Array.isArray(sugg.data) && sugg.data.length > 0 && sugg.data.length <= 5 &&
+      sugg.data.every(
+        (s) =>
+          Object.keys(s).sort().join(",") === "city,mutualCount,name,profileImage,reason,userId" &&
+          Number.isInteger(s.mutualCount) && typeof s.reason === "string" && s.reason
+      ),
+    JSON.stringify(sugg.data)
+  );
+  check(
+    "suggestions exclude self and followed users",
+    sugg.data.every((s) => s.userId !== test.id && !followingIds.includes(s.userId))
+  );
+  check(
+    "friends of friends come first with a 'Followed by' reason",
+    sugg.data[0]?.mutualCount > 0 && sugg.data[0].reason.startsWith("Followed by "),
+    JSON.stringify(sugg.data[0])
+  );
+  const sugg1 = await call("GET", "/users/suggestions?limit=1", { token: test.token });
+  check("suggestions limit=1", sugg1.status === 200 && sugg1.data.length === 1);
+
+  console.log("\nEdit post");
+  const toEdit = await call("POST", "/posts", { token: test.token, body: { description: "before edit" } });
+  if (toEdit.status === 201) {
+    const eId = toEdit.data.postId;
+    cleanups.push(() => call("DELETE", `/posts/${eId}`, { token: test.token }));
+    const edited = await call("PATCH", `/posts/${eId}`, {
+      token: test.token,
+      body: { description: "  after edit  " },
+    });
+    check(
+      "author edits -> 200 rich row with editedAt",
+      edited.status === 200 && hasPostShape(edited.data) &&
+        edited.data.description === "after edit" && edited.data.editedAt !== null,
+      JSON.stringify(edited.data)
+    );
+    const inFeed = await findPost("/posts", test.token, eId);
+    check("feed shows the edit", inFeed?.description === "after edit" && inFeed.editedAt !== null);
+    expectStatus(
+      "someone else edits -> 404",
+      await call("PATCH", `/posts/${eId}`, { token: sara.token, body: { description: "hack" } }),
+      404,
+      "Not found or not yours"
+    );
+    expectStatus(
+      "edit to 2001 chars -> 400",
+      await call("PATCH", `/posts/${eId}`, { token: test.token, body: { description: "a".repeat(2001) } }),
+      400,
+      "Post is too long (max 2000 characters)"
+    );
+    expectStatus(
+      "edit text-only post to empty -> 400",
+      await call("PATCH", `/posts/${eId}`, { token: test.token, body: { description: " " } }),
+      400,
+      "Post can't be empty"
+    );
+  }
+  expectStatus(
+    "edit missing post -> 404",
+    await call("PATCH", `/posts/${MISSING_ID}`, { token: test.token, body: { description: "x" } }),
+    404
+  );
+  expectStatus(
+    "edit invalid uuid -> 400",
+    await call("PATCH", "/posts/abc", { token: test.token, body: { description: "x" } }),
+    400,
+    "Invalid id"
+  );
+
+  console.log("\nDelete comment");
+  const cPost = await call("POST", "/posts", { token: test.token, body: { description: "comment target" } });
+  if (cPost.status === 201) {
+    const cpId = cPost.data.postId;
+    cleanups.push(() => call("DELETE", `/posts/${cpId}`, { token: test.token }));
+    const c1 = await call("POST", `/comments/${cpId}`, { token: sara.token, body: { description: "one" } });
+    const c2 = await call("POST", `/comments/${cpId}`, { token: james.token, body: { description: "two" } });
+    const list = await call("GET", `/comments/${cpId}`, { token: test.token });
+    check(
+      "comment rows have the documented fields",
+      list.status === 200 && list.data.length === 2 &&
+        list.data.every(
+          (c) =>
+            Object.keys(c).sort().join(",") ===
+            "commentId,createdAt,description,name,postId,profileImage,userId"
+        ),
+      JSON.stringify(list.data[0])
+    );
+    expectStatus(
+      "stranger deletes comment -> 404",
+      await call("DELETE", `/comments/${c1.data.commentId}`, { token: lina.token }),
+      404,
+      "Not found or not yours"
+    );
+    expectStatus(
+      "comment author deletes -> 204",
+      await call("DELETE", `/comments/${c1.data.commentId}`, { token: sara.token }),
+      204
+    );
+    check(
+      "deleted comment's notification is gone",
+      !(await notifs(test)).some((n) => n.comment?.commentId === c1.data.commentId)
+    );
+    expectStatus(
+      "post author deletes someone's comment -> 204",
+      await call("DELETE", `/comments/${c2.data.commentId}`, { token: test.token }),
+      204
+    );
+    expectStatus(
+      "delete comment twice -> 404",
+      await call("DELETE", `/comments/${c2.data.commentId}`, { token: test.token }),
+      404
+    );
+    const after = await call("GET", `/comments/${cpId}`, { token: test.token });
+    check("comments removed", after.data.length === 0);
+  }
+  expectStatus(
+    "delete comment invalid uuid -> 400",
+    await call("DELETE", "/comments/abc", { token: test.token }),
+    400,
+    "Invalid id"
+  );
+
+  console.log("\nBio");
+  const profile = (await call("GET", `/users/find/${test.id}`, { token: test.token })).data;
+  const profileBody = (bio) => ({
+    name: profile.name,
+    city: profile.city,
+    website: profile.website,
+    coverImage: profile.coverImage,
+    profileImage: profile.profileImage,
+    oldPassword: PASSWORD,
+    ...(bio === undefined ? {} : { bio }),
+  });
+  check(
+    "profile includes bio and createdAt",
+    "bio" in profile && typeof profile.createdAt === "string" && !Number.isNaN(Date.parse(profile.createdAt))
+  );
+  const loginRes = await call("POST", "/auth/login", {
+    body: { email: "test@communet.dev", password: PASSWORD },
+  });
+  check(
+    "login user includes bio and createdAt",
+    "bio" in loginRes.data.user && typeof loginRes.data.user.createdAt === "string"
+  );
+  cleanups.push(() => call("PUT", "/users", { token: test.token, body: profileBody(profile.bio) }));
+  const setBio = await call("PUT", "/users", { token: test.token, body: profileBody("  Smoke bio  ") });
+  check("update bio -> 200", setBio.status === 200 && setBio.data.bio === "Smoke bio", JSON.stringify(setBio.data));
+  const keep = await call("PUT", "/users", { token: test.token, body: profileBody() });
+  check("PUT without bio keeps it", keep.status === 200 && keep.data.bio === "Smoke bio");
+  const readBack = await call("GET", `/users/find/${test.id}`, { token: test.token });
+  check("bio round-trips", readBack.data.bio === "Smoke bio");
+  expectStatus(
+    "161-char bio -> 400",
+    await call("PUT", "/users", { token: test.token, body: profileBody("b".repeat(161)) }),
+    400,
+    "Bio is too long (max 160 characters)"
+  );
+  const restored = await call("PUT", "/users", { token: test.token, body: profileBody(profile.bio) });
+  check("bio restored", restored.status === 200 && restored.data.bio === profile.bio);
+  cleanups.pop();
 }
 
 try {

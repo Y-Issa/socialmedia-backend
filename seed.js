@@ -1,5 +1,5 @@
 // Seeds the database with demo users, posts, follows, comments, likes,
-// groups and saved posts. Group posts are rows in posts with a "groupId";
+// groups, saved posts and notifications. Group posts are rows in posts with a "groupId";
 // their likes, comments and saves live in the same tables as everything else.
 //
 //   npm run seed            -> seeds only if the database is empty
@@ -25,12 +25,12 @@ const IMG = {
 };
 
 const USERS = [
-  { key: "test", name: "Test User", email: "test@communet.dev", city: "Cairo", website: "communet.dev", coverImage: IMG.wallpaper },
-  { key: "sara", name: "Sara Ahmed", email: "sara@communet.dev", city: "Alexandria", coverImage: IMG.field },
-  { key: "omar", name: "Omar Khaled", email: "omar@communet.dev", city: "Giza", website: "omar.photos", coverImage: IMG.mountains },
-  { key: "lina", name: "Lina Haddad", email: "lina@communet.dev", city: "Beirut", coverImage: IMG.tree },
-  { key: "james", name: "James Carter", email: "james@communet.dev", city: "London" },
-  { key: "mona", name: "Mona Fathy", email: "mona@communet.dev", city: "Cairo" },
+  { key: "test", name: "Test User", email: "test@communet.dev", city: "Cairo", website: "communet.dev", coverImage: IMG.wallpaper, daysAgo: 600, bio: "Building Communet. Coffee, code and city walks." },
+  { key: "sara", name: "Sara Ahmed", email: "sara@communet.dev", city: "Alexandria", coverImage: IMG.field, daysAgo: 420, bio: "Weekend traveller and book club host 📚" },
+  { key: "omar", name: "Omar Khaled", email: "omar@communet.dev", city: "Giza", website: "omar.photos", coverImage: IMG.mountains, daysAgo: 380, bio: "Landscape photographer. Chasing golden hour." },
+  { key: "lina", name: "Lina Haddad", email: "lina@communet.dev", city: "Beirut", coverImage: IMG.tree, daysAgo: 200, bio: "Designer who loves quiet places and old trees." },
+  { key: "james", name: "James Carter", email: "james@communet.dev", city: "London", daysAgo: 90, bio: "Full-stack dev. React, Node and too much tea." },
+  { key: "mona", name: "Mona Fathy", email: "mona@communet.dev", city: "Cairo", daysAgo: 12, bio: "New here, say hi!" },
 ];
 
 // [follower, followed]
@@ -38,6 +38,8 @@ const FOLLOWS = [
   ["test", "sara"], ["test", "omar"], ["test", "lina"],
   ["sara", "test"], ["omar", "test"], ["james", "test"],
   ["sara", "omar"], ["omar", "lina"], ["lina", "sara"], ["mona", "sara"],
+  // Friends of friends, so the test account gets "Followed by ..." suggestions.
+  ["sara", "james"], ["lina", "james"], ["omar", "mona"],
 ];
 
 // hoursAgo controls ordering in the feed.
@@ -102,7 +104,11 @@ const GROUP_LIKES = [
 const SAVED = [["test", "p3"], ["test", "p4"]];
 const SAVED_GROUP = [["test", "g1"]];
 
+// Notifications older than this many hours are seeded as already read.
+const READ_AFTER_HOURS = 24;
+
 const ago = (h) => new Date(Date.now() - h * 3600 * 1000);
+const byKey = (list, key) => list.find((x) => x.key === key);
 
 async function main() {
   const client = await pool.connect();
@@ -120,7 +126,7 @@ async function main() {
 
     if (reset) {
       await client.query(
-        "TRUNCATE users, posts, comments, stories, relationships, likes, groups, group_members, saved RESTART IDENTITY CASCADE"
+        "TRUNCATE users, posts, comments, stories, relationships, likes, groups, group_members, saved, notifications RESTART IDENTITY CASCADE"
       );
       console.log("All existing data wiped.");
     }
@@ -129,18 +135,26 @@ async function main() {
     const u = {};
     for (const user of USERS) {
       const r = await client.query(
-        `INSERT INTO users (name, email, password, city, website, "coverImage")
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING "userId"`,
-        [user.name, user.email, hash, user.city || null, user.website || null, user.coverImage || null]
+        `INSERT INTO users (name, email, password, city, website, "coverImage", bio, "createdAt")
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING "userId"`,
+        [user.name, user.email, hash, user.city || null, user.website || null, user.coverImage || null,
+         user.bio || null, ago(user.daysAgo * 24)]
       );
       u[user.key] = r.rows[0].userId;
     }
 
-    for (const [a, b] of FOLLOWS) {
+    // Notifications mirror the seeded activity (never for your own posts):
+    // [recipient, actor, type, postId, groupId, commentId, hoursAgo]
+    const notifications = [];
+
+    for (const [i, [a, b]] of FOLLOWS.entries()) {
       await client.query(
         `INSERT INTO relationships ("followerUserId", "followedUserId") VALUES ($1, $2)`,
         [u[a], u[b]]
       );
+      // james -> test is recent, so the test account has an unread follow.
+      const hours = a === "james" ? 1.5 : 100 + i * 7;
+      notifications.push([u[b], u[a], "follow", null, null, null, hours]);
     }
 
     const p = {};
@@ -154,15 +168,24 @@ async function main() {
     }
 
     for (const [i, [post, user, text]] of COMMENTS.entries()) {
-      const hours = POSTS.find((x) => x.key === post).hoursAgo - 0.5 - i * 0.05;
-      await client.query(
-        `INSERT INTO comments (description, "postId", "userId", "createdAt") VALUES ($1, $2, $3, $4)`,
-        [text, p[post], u[user], ago(Math.max(hours, 0.1))]
+      const { by, hoursAgo } = byKey(POSTS, post);
+      const hours = Math.max(hoursAgo - 0.5 - i * 0.05, 0.1);
+      const r = await client.query(
+        `INSERT INTO comments (description, "postId", "userId", "createdAt") VALUES ($1, $2, $3, $4) RETURNING "commentId"`,
+        [text, p[post], u[user], ago(hours)]
       );
+      if (by !== user) {
+        notifications.push([u[by], u[user], "comment", p[post], null, r.rows[0].commentId, hours]);
+      }
     }
 
-    for (const [post, user] of LIKES) {
+    for (const [i, [post, user]] of LIKES.entries()) {
       await client.query(`INSERT INTO likes ("postId", "userId") VALUES ($1, $2)`, [p[post], u[user]]);
+      const { by, hoursAgo } = byKey(POSTS, post);
+      if (by !== user) {
+        const hours = Math.max(hoursAgo - 0.2 - i * 0.03, 0.05);
+        notifications.push([u[by], u[user], "like", p[post], null, null, hours]);
+      }
     }
 
     const g = {};
@@ -172,8 +195,15 @@ async function main() {
         [group.name, group.description, u[group.by]]
       );
       g[group.key] = r.rows[0].groupId;
-      for (const m of group.members) {
-        await client.query(`INSERT INTO group_members ("groupId", "userId") VALUES ($1, $2)`, [g[group.key], u[m]]);
+      for (const [i, m] of group.members.entries()) {
+        const hours = 150 - i * 30;
+        await client.query(
+          `INSERT INTO group_members ("groupId", "userId", "joinedAt") VALUES ($1, $2, $3)`,
+          [g[group.key], u[m], ago(hours)]
+        );
+        if (m !== group.by) {
+          notifications.push([u[group.by], u[m], "group_join", null, g[group.key], null, hours]);
+        }
       }
     }
 
@@ -188,15 +218,33 @@ async function main() {
     }
 
     for (const [i, [post, user, text]] of GROUP_COMMENTS.entries()) {
-      const hours = GROUP_POSTS.find((x) => x.key === post).hoursAgo - 0.5 - i * 0.05;
-      await client.query(
-        `INSERT INTO comments (description, "postId", "userId", "createdAt") VALUES ($1, $2, $3, $4)`,
-        [text, gp[post], u[user], ago(Math.max(hours, 0.1))]
+      const { by, hoursAgo } = byKey(GROUP_POSTS, post);
+      const hours = Math.max(hoursAgo - 0.5 - i * 0.05, 0.1);
+      const r = await client.query(
+        `INSERT INTO comments (description, "postId", "userId", "createdAt") VALUES ($1, $2, $3, $4) RETURNING "commentId"`,
+        [text, gp[post], u[user], ago(hours)]
       );
+      if (by !== user) {
+        notifications.push([u[by], u[user], "comment", gp[post], null, r.rows[0].commentId, hours]);
+      }
     }
 
-    for (const [post, user] of GROUP_LIKES) {
+    for (const [i, [post, user]] of GROUP_LIKES.entries()) {
       await client.query(`INSERT INTO likes ("postId", "userId") VALUES ($1, $2)`, [gp[post], u[user]]);
+      const { by, hoursAgo } = byKey(GROUP_POSTS, post);
+      if (by !== user) {
+        const hours = Math.max(hoursAgo - 0.2 - i * 0.03, 0.05);
+        notifications.push([u[by], u[user], "like", gp[post], null, null, hours]);
+      }
+    }
+
+    for (const [recipient, actor, type, postId, groupId, commentId, hours] of notifications) {
+      await client.query(
+        `INSERT INTO notifications ("recipientId", "actorId", type, "postId", "groupId", "commentId", "createdAt", "readAt")
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [recipient, actor, type, postId, groupId, commentId, ago(hours),
+         hours > READ_AFTER_HOURS ? ago(hours - 1) : null]
+      );
     }
 
     // Spread savedAt so the saved list (ordered by savedAt) has a stable order.
@@ -216,7 +264,8 @@ async function main() {
     console.log(
       `Seeded ${USERS.length} users, ${POSTS.length} posts, ${COMMENTS.length} comments, ` +
         `${LIKES.length} likes, ${FOLLOWS.length} follows, ${GROUPS.length} groups, ` +
-        `${GROUP_POSTS.length} group posts, ${SAVED.length + SAVED_GROUP.length} saved posts.`
+        `${GROUP_POSTS.length} group posts, ${SAVED.length + SAVED_GROUP.length} saved posts, ` +
+        `${notifications.length} notifications.`
     );
     console.log(`\nTest account:  test@communet.dev  /  ${PASSWORD}`);
     console.log(`Other accounts (same password): ${USERS.slice(1).map((x) => x.email).join(", ")}`);

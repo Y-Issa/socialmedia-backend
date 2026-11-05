@@ -11,6 +11,8 @@ import {
   groupMembershipQuery,
   joinGroupQuery,
   leaveGroupQuery,
+  notifyGroupJoinQuery,
+  unnotifyGroupJoinQuery,
 } from "../queries.js";
 import {
   cleanString,
@@ -19,6 +21,7 @@ import {
   postError,
 } from "../utils/validate.js";
 import { NOT_MEMBER } from "../utils/access.js";
+import { notify } from "../utils/notify.js";
 import { pageParams, parsePage, toPage } from "../utils/pagination.js";
 
 // Sends 404/403 and returns false unless userId is a member of groupId.
@@ -141,6 +144,7 @@ export async function joinGroup(req, res) {
   try {
     // ON CONFLICT DO NOTHING: joining twice is a no-op.
     await pool.query(joinGroupQuery, [groupId, id]);
+    await notify(notifyGroupJoinQuery, [groupId, id]);
     res.status(204).send();
   } catch (error) {
     if (isForeignKeyViolation(error)) {
@@ -165,6 +169,7 @@ export async function leaveGroup(req, res) {
     }
 
     await pool.query(leaveGroupQuery, [groupId, id]);
+    await notify(unnotifyGroupJoinQuery, [groupId, id]);
     res.status(204).send();
   } catch (error) {
     console.error("leaveGroup:", error);

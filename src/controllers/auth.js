@@ -91,10 +91,23 @@ export async function logout(req, res) {
   res.status(200).send("Logged out");
 }
 
+// A token can outlive its user (account deleted, database reseeded), so
+// confirm the user still exists; a 401 makes the client log out.
 export async function checkToken(req, res) {
   const userInfo = req.userInfo;
   if (!userInfo) {
     return res.status(401).send("Unauthorized");
   }
-  res.status(200).json(userInfo);
+  try {
+    const result = await pool.query(`SELECT 1 FROM users WHERE "userId" = $1`, [
+      userInfo.id,
+    ]);
+    if (result.rowCount === 0) {
+      return res.status(401).send("Unauthorized");
+    }
+    res.status(200).json(userInfo);
+  } catch (error) {
+    console.error("checkToken:", error);
+    res.status(500).send("Server error");
+  }
 }
