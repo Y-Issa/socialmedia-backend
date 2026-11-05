@@ -1,8 +1,11 @@
 import express from "express";
 import { getLikes, createLike, deleteLike } from "../controllers/like.js";
 import { verifyToken } from "../middleware/jwtMiddleware.js";
+import { validateIdParam } from "../utils/validate.js";
 
 const router = express.Router();
+
+router.param("postId", validateIdParam);
 
 router.get("/:postId", getLikes);
 router.post("/:postId", verifyToken, createLike);

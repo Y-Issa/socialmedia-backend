@@ -2,9 +2,34 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import pool from "../../db.js";
 import { checkEmailExistsQuery, createUserQuery } from "../queries.js";
+import { cleanString, isEmail } from "../utils/validate.js";
+
+const SALT_ROUNDS = 10;
+const MIN_PASSWORD_LENGTH = 6;
+
+// Compared against when the email is unknown, so a wrong email takes about
+// as long as a wrong password.
+const dummyHash = bcrypt.hash("not-a-real-password", SALT_ROUNDS);
 
 export async function register(req, res) {
-  const { name, email, password } = req.body;
+  const name = cleanString(req.body?.name);
+  const email = cleanString(req.body?.email);
+  const password = typeof req.body?.password === "string" ? req.body.password : "";
+
+  if (!name || !email || !password) {
+    return res.status(400).send("Name, email and password are required");
+  }
+  if (name.length > 100) {
+    return res.status(400).send("Name is too long (max 100 characters)");
+  }
+  if (!isEmail(email) || email.length > 100) {
+    return res.status(400).send("Please enter a valid email address");
+  }
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    return res
+      .status(400)
+      .send(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
+  }
 
   try {
     const emailCheckResult = await pool.query(checkEmailExistsQuery, [email]);
@@ -12,50 +37,52 @@ export async function register(req, res) {
       return res.status(409).send("Email already exists");
     }
 
-    const salt = bcrypt.genSaltSync(10);
-    const hashedPassword = bcrypt.hashSync(password, salt);
+    const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
 
     const createUserResult = await pool.query(createUserQuery, [
       name,
       email,
       hashedPassword,
     ]);
-    res.status(201).json({
-      user: (({ password, ...rest }) => rest)(createUserResult.rows[0]),
-    });
+    res.status(201).json({ user: createUserResult.rows[0] });
   } catch (error) {
+    console.error("register:", error);
     res.status(500).send("Server error");
   }
 }
 
 export async function login(req, res) {
-  const { email, password } = req.body;
+  const email = cleanString(req.body?.email);
+  const password = typeof req.body?.password === "string" ? req.body.password : "";
+
+  if (!email || !password) {
+    return res.status(400).send("Email and password are required");
+  }
 
   try {
     const emailCheckResult = await pool.query(checkEmailExistsQuery, [email]);
-    if (emailCheckResult.rows.length === 0) {
-      return res.status(401).send("Email is incorrect");
-    }
+    const user = emailCheckResult.rows[0];
 
-    const checkPassword = bcrypt.compareSync(
+    // Same response for an unknown email and a wrong password so the
+    // endpoint can't be used to find out which emails are registered.
+    const checkPassword = await bcrypt.compare(
       password,
-      emailCheckResult.rows[0].password
+      user ? user.password : await dummyHash
     );
-    if (!checkPassword) {
-      return res.status(401).send("Password is incorrect");
+    if (!user || !checkPassword) {
+      return res.status(401).send("Invalid email or password");
     }
 
-    const token = jwt.sign(
-      { id: emailCheckResult.rows[0].userId },
-      process.env.JWT_SECRET,
-      { expiresIn: "1d" }
-    );
+    const token = jwt.sign({ id: user.userId }, process.env.JWT_SECRET, {
+      expiresIn: "1d",
+    });
 
     res.status(200).json({
-      user: (({ password, ...rest }) => rest)(emailCheckResult.rows[0]),
+      user: (({ password, ...rest }) => rest)(user),
       token,
     });
   } catch (error) {
+    console.error("login:", error);
     res.status(500).send("Server error");
   }
 }

@@ -8,6 +8,7 @@ import {
   deleteGroup,
   deleteGroupPost,
   deleteGroupPostLike,
+  getGroup,
   getGroupComments,
   getGroupMembers,
   getGroupPostLikes,
@@ -21,8 +22,13 @@ import {
   saveGroupPost,
   unsaveGroupPost,
 } from "../controllers/group.js";
+import { validateIdParam } from "../utils/validate.js";
 
 const router = express.Router();
+
+// Every :groupId / :postId must be a UUID (400 "Invalid id" otherwise).
+router.param("groupId", validateIdParam);
+router.param("postId", validateIdParam);
 
 router.post("/", verifyToken, createGroup);
 router.delete("/:groupId/delete", verifyToken, deleteGroup);
@@ -48,5 +54,9 @@ router.post("/save/:postId", verifyToken, saveGroupPost);
 router.get("/save", verifyToken, getGroupSavedPosts);
 router.get("/save/ids", verifyToken, getGroupSavedPostIds);
 router.delete("/save/:postId", verifyToken, unsaveGroupPost);
+
+// Registered last so the static GET routes above (/joined, /unjoined, /save,
+// /save/ids) are matched first.
+router.get("/:groupId", verifyToken, getGroup);
 
 export default router;

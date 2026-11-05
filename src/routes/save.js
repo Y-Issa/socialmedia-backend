@@ -1,5 +1,6 @@
 import express from "express";
 import { verifyToken } from "../middleware/jwtMiddleware.js";
+import { validateIdParam } from "../utils/validate.js";
 import {
   getSavedPostIds,
   getSavedPosts,
@@ -8,6 +9,8 @@ import {
 } from "../controllers/save.js";
 
 const router = express.Router();
+
+router.param("postId", validateIdParam);
 
 router.get("/", verifyToken, getSavedPosts);
 router.get("/ids", verifyToken, getSavedPostIds);

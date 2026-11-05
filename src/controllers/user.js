@@ -1,44 +1,90 @@
 import bcrypt from "bcrypt";
 import pool from "../../db.js";
-import { getUserByIdQuery, updateUserQuery } from "../queries.js";
+import {
+  getUserByIdQuery,
+  getUserPasswordQuery,
+  updateUserQuery,
+} from "../queries.js";
+import { cleanString, optionalString } from "../utils/validate.js";
+
+const SALT_ROUNDS = 10;
+const MIN_PASSWORD_LENGTH = 6;
 
 export async function getUser(req, res) {
   const { uid } = req.params;
+  const { id } = req.userInfo;
 
   try {
     const result = await pool.query(getUserByIdQuery, [uid]);
-    res.status(200).json((({ password, ...rest }) => rest)(result.rows[0]));
+    const user = result.rows[0];
+    if (!user) {
+      return res.status(404).send("User not found");
+    }
+
+    // Email is private: only return it to the user themselves.
+    if (user.userId !== id) {
+      delete user.email;
+    }
+    res.status(200).json(user);
   } catch (error) {
+    console.error("getUser:", error);
     res.status(500).send("Server error");
   }
 }
 
 export async function updateUser(req, res) {
-  const {
-    name,
-    city,
-    website,
-    newPassword,
-    oldPassword,
-    coverImage,
-    profileImage,
-  } = req.body;
+  const body = req.body || {};
+  const name = cleanString(body.name);
+  const city = optionalString(body.city);
+  const website = optionalString(body.website);
+  const coverImage = optionalString(body.coverImage);
+  const profileImage = optionalString(body.profileImage);
+  const { newPassword, oldPassword } = body;
   const userInfo = req.userInfo;
 
-  try {
-    const userResult = await pool.query(getUserByIdQuery, [userInfo.id]);
-    const user = userResult.rows[0];
+  if (!name) {
+    return res.status(400).send("Name is required");
+  }
+  if (name.length > 100) {
+    return res.status(400).send("Name is too long (max 100 characters)");
+  }
+  if ((city && city.length > 100) || (website && website.length > 200)) {
+    return res.status(400).send("City or website is too long");
+  }
+  if (
+    (coverImage && coverImage.length > 255) ||
+    (profileImage && profileImage.length > 255)
+  ) {
+    return res.status(400).send("Invalid image");
+  }
+  if (typeof oldPassword !== "string" || oldPassword === "") {
+    return res.status(400).send("Current password is required");
+  }
+  if (
+    newPassword &&
+    (typeof newPassword !== "string" || newPassword.length < MIN_PASSWORD_LENGTH)
+  ) {
+    return res
+      .status(400)
+      .send(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
+  }
 
-    const match = bcrypt.compareSync(oldPassword, user.password);
+  try {
+    const userResult = await pool.query(getUserPasswordQuery, [userInfo.id]);
+    const user = userResult.rows[0];
+    if (!user) {
+      return res.status(404).send("User not found");
+    }
+
+    const match = await bcrypt.compare(oldPassword, user.password);
     if (!match) {
-      return res.status(401).send("Password is incorrect");
+      // 400, not 401: a 401 would make the frontend log the user out.
+      return res.status(400).send("Password is incorrect");
     }
 
     let password = user.password;
     if (newPassword) {
-      const salt = bcrypt.genSaltSync(10);
-      const hashedPassword = bcrypt.hashSync(newPassword, salt);
-      password = hashedPassword;
+      password = await bcrypt.hash(newPassword, SALT_ROUNDS);
     }
 
     const updateUserResult = await pool.query(updateUserQuery, [
@@ -50,10 +96,9 @@ export async function updateUser(req, res) {
       coverImage,
       userInfo.id,
     ]);
-    res
-      .status(200)
-      .json((({ password, ...rest }) => rest)(updateUserResult.rows[0]));
+    res.status(200).json(updateUserResult.rows[0]);
   } catch (error) {
+    console.error("updateUser:", error);
     res.status(500).send("Server error");
   }
 }

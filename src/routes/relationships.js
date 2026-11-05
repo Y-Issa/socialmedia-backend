@@ -5,8 +5,11 @@ import {
   deleteRelationship,
 } from "../controllers/relationship.js";
 import { verifyToken } from "../middleware/jwtMiddleware.js";
+import { validateIdParam } from "../utils/validate.js";
 
 const router = express.Router();
+
+router.param("uid", validateIdParam);
 
 router.get("/:uid", getRelationships);
 router.post("/:uid", verifyToken, createRelationship);
