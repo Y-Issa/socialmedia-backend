@@ -14,6 +14,7 @@ import {
   optionalString,
   postError,
 } from "../utils/validate.js";
+import { ensurePostAccess } from "../utils/access.js";
 import { pageParams, parsePage, toPage } from "../utils/pagination.js";
 
 // GET /api/posts?limit=&cursor=           -> the current user's feed
@@ -40,6 +41,26 @@ export async function getPosts(req, res) {
     res.status(200).json(toPage(result.rows, page.limit));
   } catch (error) {
     console.error("getPosts:", error);
+    res.status(500).send("Server error");
+  }
+}
+
+// GET /api/posts/:postId -> 200 rich post row (same shape as list rows).
+// 404 when it doesn't exist, 403 for a group post the viewer can't see.
+export async function getPost(req, res) {
+  const { postId } = req.params;
+  const { id } = req.userInfo;
+
+  try {
+    if (!(await ensurePostAccess(res, postId, id))) return;
+
+    const result = await pool.query(getPostRowQuery, [id, postId]);
+    if (result.rows.length === 0) {
+      return res.status(404).send("Post not found");
+    }
+    res.status(200).json(result.rows[0]);
+  } catch (error) {
+    console.error("getPost:", error);
     res.status(500).send("Server error");
   }
 }

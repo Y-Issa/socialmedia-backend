@@ -10,6 +10,9 @@
 
 import bcrypt from "bcrypt";
 import pool from "./db.js";
+import { seedMessages } from "./seeds/messages.js";
+import { seedStories } from "./seeds/stories.js";
+import { seedEvents } from "./seeds/events.js";
 
 const PASSWORD = "test1234";
 const reset = process.argv.includes("--reset");
@@ -126,7 +129,7 @@ async function main() {
 
     if (reset) {
       await client.query(
-        "TRUNCATE users, posts, comments, stories, relationships, likes, groups, group_members, saved, notifications RESTART IDENTITY CASCADE"
+        "TRUNCATE users, posts, comments, stories, relationships, likes, groups, group_members, saved, notifications, stories, story_views, conversations, conversation_members, conversation_pairs, messages, events, event_rsvps RESTART IDENTITY CASCADE"
       );
       console.log("All existing data wiped.");
     }
@@ -259,13 +262,18 @@ async function main() {
       );
     }
 
+    // Feature seeds (messages, stories, events) live in ./seeds.
+    const messageCount = await seedMessages(client, u);
+    await seedStories(client, u);
+    await seedEvents(client, u, g);
+
     await client.query("COMMIT");
 
     console.log(
       `Seeded ${USERS.length} users, ${POSTS.length} posts, ${COMMENTS.length} comments, ` +
         `${LIKES.length} likes, ${FOLLOWS.length} follows, ${GROUPS.length} groups, ` +
         `${GROUP_POSTS.length} group posts, ${SAVED.length + SAVED_GROUP.length} saved posts, ` +
-        `${notifications.length} notifications.`
+        `${notifications.length} notifications, ${messageCount ?? 0} messages, plus stories and events.`
     );
     console.log(`\nTest account:  test@communet.dev  /  ${PASSWORD}`);
     console.log(`Other accounts (same password): ${USERS.slice(1).map((x) => x.email).join(", ")}`);

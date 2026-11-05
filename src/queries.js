@@ -44,14 +44,14 @@ export const updateUserQuery = `UPDATE users SET name = $1, city = $2, website =
 const isoUtc = (column) =>
   `to_char(${column} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 
-const POST_COLUMNS = `P."postId", P.description, P.image, P."createdAt", P."editedAt", P."userId",
+export const POST_COLUMNS = `P."postId", P.description, P.image, P."createdAt", P."editedAt", P."userId",
   U.name, U."profileImage", P."groupId", G.name AS "groupName",
   (SELECT COUNT(*)::int FROM likes L WHERE L."postId" = P."postId") AS "likeCount",
   (SELECT COUNT(*)::int FROM comments C WHERE C."postId" = P."postId") AS "commentCount",
   EXISTS (SELECT 1 FROM likes L WHERE L."postId" = P."postId" AND L."userId" = $1) AS "likedByMe",
   EXISTS (SELECT 1 FROM saved S2 WHERE S2."postId" = P."postId" AND S2."userId" = $1) AS "savedByMe"`;
 
-const POST_FROM = `FROM posts P
+export const POST_FROM = `FROM posts P
   JOIN users U ON U."userId" = P."userId"
   LEFT JOIN groups G ON G."groupId" = P."groupId"`;
 
@@ -208,12 +208,15 @@ export const getNotificationsQuery = `SELECT N."notificationId", N.type, N."crea
   CASE WHEN G."groupId" IS NULL THEN NULL ELSE json_build_object('groupId', G."groupId", 'name', G.name) END AS "group",
   CASE WHEN C."commentId" IS NULL THEN NULL ELSE json_build_object(
     'commentId', C."commentId", 'excerpt', LEFT(C.description, 80)) END AS comment,
+  CASE WHEN E."eventId" IS NULL THEN NULL ELSE json_build_object(
+    'eventId', E."eventId", 'title', E.title, 'startsAt', E."startsAt") END AS event,
   ${isoUtc('N."createdAt"')} AS "cursorKey"
   FROM notifications N
   JOIN users A ON A."userId" = N."actorId"
   LEFT JOIN posts P ON P."postId" = N."postId"
   LEFT JOIN groups G ON G."groupId" = N."groupId"
   LEFT JOIN comments C ON C."commentId" = N."commentId"
+  LEFT JOIN events E ON E."eventId" = N."eventId"
   WHERE N."recipientId" = $1
     AND ($2::timestamptz IS NULL OR (N."createdAt", N."notificationId") < ($2::timestamptz, $3::uuid))
   ORDER BY N."createdAt" DESC, N."notificationId" DESC LIMIT $4`;
@@ -225,34 +228,7 @@ export const markAllReadQuery = `UPDATE notifications SET "readAt" = CURRENT_TIM
 export const markReadQuery = `UPDATE notifications SET "readAt" = CURRENT_TIMESTAMP
   WHERE "recipientId" = $1 AND "readAt" IS NULL AND "notificationId" = ANY($2::uuid[])`;
 
-// Search queries
-//
-// $1 viewer, $2 search text, $3 LIKE pattern ('%text%', wildcards escaped),
-// $4 LIMIT. A row matches on a substring (ILIKE, served by the trigram GIN
-// indexes) or trigram similarity; prefix matches rank first.
-
-export const searchUsersQuery = `SELECT U."userId", U.name, U."profileImage", U.city,
-  EXISTS (SELECT 1 FROM relationships R WHERE R."followerUserId" = $1 AND R."followedUserId" = U."userId") AS "isFollowing"
-  FROM users U
-  WHERE U.name ILIKE $3 OR U.name % $2
-  ORDER BY (U.name ILIKE $5) DESC, similarity(U.name, $2) DESC, U.name, U."userId"
-  LIMIT $4`;
-
-export const searchGroupsQuery = `SELECT G."groupId", G.name, G.description, G.image,
-  (SELECT COUNT(*)::int FROM group_members M WHERE M."groupId" = G."groupId") AS "memberCount",
-  EXISTS (SELECT 1 FROM group_members M WHERE M."groupId" = G."groupId" AND M."userId" = $1) AS "isMember"
-  FROM groups G
-  WHERE G.name ILIKE $3 OR G.name % $2
-  ORDER BY (G.name ILIKE $5) DESC, similarity(G.name, $2) DESC, G.name, G."groupId"
-  LIMIT $4`;
-
-// Rich post rows, newest first. Group posts only for the group's members.
-export const searchPostsQuery = `SELECT ${POST_COLUMNS}
-  ${POST_FROM}
-  WHERE (P.description ILIKE $3 OR $2 <% P.description)
-    AND (P."groupId" IS NULL OR EXISTS (SELECT 1 FROM group_members M WHERE M."groupId" = P."groupId" AND M."userId" = $1))
-  ORDER BY P."createdAt" DESC, P."postId" DESC
-  LIMIT $4`;
+// Search queries live in ../searchQueries.js (accent-insensitive).
 
 // Suggestions: users $1 doesn't follow (never $1). Friends of friends first
 // (by mutualCount), then by follower count, then newest accounts.

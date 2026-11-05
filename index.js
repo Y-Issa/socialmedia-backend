@@ -14,6 +14,10 @@ import saveRouter from "./src/routes/save.js";
 import groupsRouter from "./src/routes/groups.js";
 import notificationsRouter from "./src/routes/notifications.js";
 import searchRouter from "./src/routes/search.js";
+import storiesRouter from "./src/routes/stories.js";
+import messagesRouter from "./src/routes/messages.js";
+import eventsRouter, { groupEventsRouter } from "./src/routes/events.js";
+import { startStoryCleanup } from "./src/controllers/story.js";
 
 const app = express();
 const PORT = process.env.PORT || 8001;
@@ -48,9 +52,13 @@ app.use("/api/comments", commentsRouter);
 app.use("/api/auth", authRouter);
 app.use("/api/relationships", relationshipsRouter);
 app.use("/api/save", saveRouter);
+app.use("/api/groups/:groupId/events", groupEventsRouter);
 app.use("/api/groups", groupsRouter);
 app.use("/api/notifications", notificationsRouter);
 app.use("/api/search", searchRouter);
+app.use("/api/stories", storiesRouter);
+app.use("/api/messages", messagesRouter);
+app.use("/api/events", eventsRouter);
 
 // Unknown API routes.
 app.use("/api", (req, res) => {
@@ -72,6 +80,8 @@ app.use((error, req, res, next) => {
   }
   res.status(500).send("Server error");
 });
+
+startStoryCleanup();
 
 app.listen(PORT, () => {
   console.log(`API running on http://localhost:${PORT}`);

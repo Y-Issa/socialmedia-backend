@@ -674,7 +674,7 @@ async function main() {
     404
   );
   console.log("\nNotifications");
-  const NOTIF_KEYS = "actor,comment,createdAt,group,notificationId,post,readAt,type";
+  const NOTIF_KEYS = "actor,comment,createdAt,event,group,notificationId,post,readAt,type";
   const unread = async (who) =>
     (await call("GET", "/notifications/unread-count", { token: who.token })).data.count;
   const notifs = async (who) =>

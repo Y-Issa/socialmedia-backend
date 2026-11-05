@@ -16,7 +16,8 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "seed": "node seed.js"
+    "seed": "node seed.js",
+    "smoke": "node scripts/smoke.mjs && node scripts/smoke-permalink.mjs && node scripts/smoke-messages.mjs && node scripts/smoke-stories.mjs && node scripts/smoke-events.mjs"
   },
   "type": "module",
   "keywords": [],

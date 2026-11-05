@@ -3,7 +3,7 @@ import {
   searchGroupsQuery,
   searchPostsQuery,
   searchUsersQuery,
-} from "../queries.js";
+} from "../searchQueries.js";
 import { cleanString } from "../utils/validate.js";
 
 const TYPES = ["all", "users", "posts", "groups"];
